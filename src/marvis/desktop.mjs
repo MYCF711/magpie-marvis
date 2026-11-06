@@ -8,9 +8,15 @@
 // ⚠ 只在 Windows 上有；其它平台抛「不可用」，让用户走浏览器登录。
 // ⚠ **不需要管理员权限**（同用户进程即可）；跨用户会失败并给出明确错误。
 //
-// ⚠⚠ 为什么把 C# 和 PS 都落成临时文件：`powershell -Command <长脚本>` 会被
-//   Windows 命令行参数解析吃掉引号（C# 里的 `""` 空字符串必然炸成
-//   `MissingEndParenthesisInMethodCall`）。`-File` 走文件，不经过参数解析。
+// ⚠⚠ 四个已经踩过的坑，改这里之前先读：
+//   1. C# 不能经 `powershell -Command <长脚本>` 传 —— 引号会被 Windows 命令行
+//      参数解析吃掉（`return "";` 必然炸成 MissingEndParenthesisInMethodCall）。
+//      → 落成临时 .cs + .ps1，走 `-File`。
+//   2. `Add-Type -Path` **不能**再给 `-Language` —— 两者属于不同参数集，
+//      同时给报 `AmbiguousParameterSet`。`-Path` 自己会按扩展名推断。
+//   3. .ps1 里**不要写中文** —— PowerShell 5.1 按 ANSI 读脚本，UTF-8 中文会变乱码，
+//      还可能把后面的语法带崩。注释一律英文。
+//   4. 输出走 **base64** —— 内存里什么字节都有，直接 `Write-Output` 会被编码/换行搞坏。
 
 import { execFileSync } from "node:child_process"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
@@ -21,25 +27,39 @@ import { deviceGuid } from "./login.mjs"
 /** 探查本机是否有 Marvis 客户端在跑 */
 export async function desktopAvailable() {
   try {
-    return Boolean(findPid())
+    return findPids().length > 0
   } catch {
     return false
   }
 }
 
-/** 找 MarvisAgent.exe 的 PID（真正持有登录态的那个进程） */
-function findPid(name = "MarvisAgent.exe") {
-  const out = execFileSync("tasklist", ["/FI", `IMAGENAME eq ${name}`, "/FO", "CSV", "/NH"], {
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 10_000,
-  })
-  const m = /"([^"]+)","(\d+)"/.exec(out)
-  return m ? Number(m[2]) : 0
+/**
+ * 列出所有可能持有登录态的进程 PID。
+ *
+ * ⚠ 两个进程都要扫：
+ *   · `Marvis.exe`（Electron 主进程）持有 **Chromium cookie**（`accesstoken=` 那串）
+ *   · `MarvisAgent.exe`（Python agent）持有 `Ual-Access-Access-Token` 请求头
+ * 只扫一个会漏 —— 实测 `Marvis.exe` 有 3 个实例，cookie 只在其中一个里。
+ */
+function findPids() {
+  const pids = []
+  for (const name of ["Marvis.exe", "MarvisAgent.exe"]) {
+    try {
+      const out = execFileSync("tasklist", ["/FI", `IMAGENAME eq ${name}`, "/FO", "CSV", "/NH"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: 10_000,
+      })
+      for (const m of out.matchAll(/"[^"]+","(\d+)"/g)) pids.push(Number(m[1]))
+    } catch {
+      /* 没装 / 没跑 */
+    }
+  }
+  return pids
 }
 
-/** C# 扫描器 —— 写成独立 .cs，由 Add-Type -Path 编译 */
-const CS = String.raw`
+/** C# 扫描器 —— 写成独立 .cs，由 Add-Type -Path 编译。**全 ASCII**。 */
+const CS = `
 using System;
 using System.Text;
 using System.Runtime.InteropServices;
@@ -85,7 +105,7 @@ public class MarvisMemScan
         }
     }
 
-    /// 扫一遍，把命中 needle 的区段整段拼起来返回（供上层用正则抠字段）
+    // Scan committed readable regions for needle, append every hit region.
     public static string Scan(int pid, string needle)
     {
         IntPtr h = OpenProcess(0x0410, false, pid);
@@ -118,57 +138,65 @@ public class MarvisMemScan
 }
 `
 
+/** run.ps1 的内容 —— **全 ASCII**，见文件头第 3 条 */
+function ps1(pid) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    // -Path implies the language from the extension; do NOT also pass -Language
+    // (different parameter sets -> AmbiguousParameterSet).
+    "Add-Type -Path (Join-Path $PSScriptRoot 'Scan.cs')",
+    `$text = [MarvisMemScan]::Scan(${pid}, 'accesstoken=')`,
+    `if ([string]::IsNullOrEmpty($text)) { $text = [MarvisMemScan]::Scan(${pid}, 'accessToken') }`,
+    "$b = [System.Text.Encoding]::UTF8.GetBytes($text)",
+    "[Console]::Out.Write([Convert]::ToBase64String($b))",
+    "",
+  ].join("\r\n")
+}
+
 /**
  * 从进程内存里读出登录态。
  *
  * 内存里有两处：
  *   1. `openid=...; accesstoken=...; refreshtoken=...; logintype=QC; ...`（cookie 形态）
- *   2. 结构化对象 `{"openid":"...","accessToken":"...","refreshToken":"..."}`
+ *   2. 结构化对象 `{"openid":"...","accessToken":"..."}`
  * 优先用 1（字段最全，带 logintype 和到期时刻）。
- *
- * @returns {Promise<{ openid: string, accessToken: string, refreshToken?: string, loginType: string, guid: string, expiresAt?: number }>}
  */
 export async function importFromDesktop() {
   if (process.platform !== "win32") {
     throw new Error("「从本机导入」只支持 Windows。请改用 QQ / 微信 登录。")
   }
-  const pid = findPid()
-  if (!pid) {
-    throw new Error("没找到运行中的 MarvisAgent.exe。请先打开 Marvis 客户端并登录，或改用 QQ / 微信 登录。")
+  const pids = findPids()
+  if (!pids.length) {
+    throw new Error("没找到运行中的 Marvis 客户端。请先打开 Marvis 并登录，或改用 QQ / 微信 登录。")
   }
 
   const dir = mkdtempSync(join(tmpdir(), "magpie-marvis-scan-"))
   try {
     writeFileSync(join(dir, "Scan.cs"), CS, "utf8")
-    // 只输出命中区段的 base64，避免编码/长度问题
-    writeFileSync(
-      join(dir, "run.ps1"),
-      [
-        "$ErrorActionPreference = 'Stop'",
-        "Add-Type -Path (Join-Path $PSScriptRoot 'Scan.cs') -Language CSharp",
-        `$text = [MarvisMemScan]::Scan(${pid}, 'accesstoken=')`,
-        "if ([string]::IsNullOrEmpty($text)) { $text = [MarvisMemScan]::Scan(" + pid + ", 'accessToken') }",
-        "$b = [System.Text.Encoding]::UTF8.GetBytes($text)",
-        "[Console]::Out.Write([Convert]::ToBase64String($b))",
-        "",
-      ].join("\r\n"),
-      "utf8",
-    )
 
-    const b64 = execFileSync(
-      "powershell",
-      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(dir, "run.ps1")],
-      { encoding: "utf8", windowsHide: true, timeout: 180_000, maxBuffer: 128 * 1024 * 1024 },
-    ).trim()
-
-    const text = b64 ? Buffer.from(b64, "base64").toString("utf8") : ""
-    const acct = parseLoginState(text)
-    if (!acct) {
-      throw new Error(
-        "读到了 MarvisAgent 进程，但里面没有登录态。请在 Marvis 客户端里登录一次再试，或改用 QQ / 微信 登录。",
-      )
+    let lastErr = ""
+    for (const pid of pids) {
+      writeFileSync(join(dir, "run.ps1"), ps1(pid), "utf8")
+      let b64 = ""
+      try {
+        b64 = execFileSync(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(dir, "run.ps1")],
+          { encoding: "utf8", windowsHide: true, timeout: 180_000, maxBuffer: 128 * 1024 * 1024 },
+        ).trim()
+      } catch (err) {
+        lastErr = String(err?.stderr ?? "").trim() || String(err?.message ?? err)
+        continue
+      }
+      const text = b64 ? Buffer.from(b64, "base64").toString("utf8") : ""
+      const acct = parseLoginState(text)
+      if (acct) return acct
     }
-    return acct
+
+    throw new Error(
+      "读到了 Marvis 进程，但里面没有登录态。请在 Marvis 客户端里登录一次再试，或改用 QQ / 微信 登录。" +
+        (lastErr ? `（最后一次错误：${lastErr.slice(0, 200)}）` : ""),
+    )
   } finally {
     try {
       rmSync(dir, { recursive: true, force: true })
