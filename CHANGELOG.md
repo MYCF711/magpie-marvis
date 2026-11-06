@@ -3,9 +3,17 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
-## 0.1.7 — 2026-11-06
+## 0.1.9 — 2026-11-06
 
-**修复**
+**修复（这是 `-109` 的真正根因）**
+
+- **`redirect_uri` 少了 `?login_type=QC`**。Marvis 渲染层的 `Bpe(e)` 返回的是
+  `.../marvis_oauth?login_type=${e}`，我写成了 `.../marvis_oauth`。
+  服务端靠这个参数知道「用哪个 app 的 `client_secret` 去换 code」——
+  少了它，**哪怕 code 是真的也一律 `-109 RC_PARAMS_INVALID`**（是参数无效，不是 code 无效）。
+- 浏览器登录改为**正常走完回调请求**（带 Cookie、带正确 `redirect_uri`），
+  只读第一个响应体；不再拦截后用 Node 重放（重放丢 Cookie，同样 `-109`）
+- 微信登录同步修正
 
 - **浏览器登录「授权码已被使用过」（`-109`）**：根因是 **QQ 会把 `redirect_uri` 的查询串整个丢掉** ——
   落地页收到的是 `?code=...&state=...`，**没有 `login_type`**，服务端因此判参数无效。

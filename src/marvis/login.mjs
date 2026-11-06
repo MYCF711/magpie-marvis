@@ -17,7 +17,17 @@ import { createRequire } from "node:module"
 
 const require = createRequire(import.meta.url)
 
-/** redirect_uri —— 与 Marvis 客户端逐字一致 */
+/**
+ * redirect_uri 的**基址**（不带查询串）。
+ *
+ * ⚠⚠ 授权时必须拼上 `?login_type=<QC|WX>` —— 这是整个登录的关键：
+ *   服务端要靠它知道「用哪个 app 的 client_secret 去换 code」。
+ *   少了它，哪怕 code 是真的，也会一律回 `-109 RC_PARAMS_INVALID`
+ *   （`RC_PARAMS_INVALID` = 参数无效，不是 code 无效）。
+ *
+ *   对照 Marvis 渲染层的 `Bpe(e)`：
+ *     `${base}/${n}/marvis_oauth?login_type=${e}`   // e = QC | WX
+ */
 const REDIRECT = `${BASE}/marvis_client_login/marvis_oauth`
 
 /**
@@ -30,7 +40,8 @@ export function authorizeUrl(loginType, guid) {
   if (loginType === "WX") {
     const p = new URLSearchParams({
       appid: WX_APP_ID,
-      redirect_uri: REDIRECT,
+      // ⚠ 同样必须带 ?login_type=WX
+      redirect_uri: `${REDIRECT}?login_type=${loginType}`,
       response_type: "code",
       scope: "snsapi_login",
       state: guid,
@@ -43,7 +54,8 @@ export function authorizeUrl(loginType, guid) {
     display: "pc",
     response_type: "code",
     client_id: QQ_APP_ID,
-    redirect_uri: REDIRECT,
+    // ⚠ 必须带 ?login_type=QC，见 REDIRECT 上方说明
+    redirect_uri: `${REDIRECT}?login_type=${loginType}`,
     state: String(Math.floor(Math.random() * 1e9)),
   })
   return `https://graph.qq.com/oauth2.0/authorize?${p}`
