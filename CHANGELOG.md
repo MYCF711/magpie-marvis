@@ -3,7 +3,17 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
-## 0.2.3 — 2026-11-06
+## 0.2.4 — 2026-11-06
+
+**修复（`-109` 的最终根因）**
+
+- **`marvis_oauth` 会被请求两次**：QQ 的 `self_redirect` + 页面自身重载，
+  让同一个 code 打两遍 —— 第一次成功返回 token，第二次因为 code 已消耗而回
+  `-109 RC_PARAMS_INVALID`。我之前读的是**页面最终状态**，拿到的正是第二次。
+  客户端主进程用 `[oauth-dedup]`（"reuse first request"）处理这件事；
+  插件改成监听 `Network.responseReceived`，**只认第一个响应体**，抓到立刻返回
+- **`authorize()` 阻塞 1.4 秒**：里面调了 `findBrowser()`（15 次注册表查询），
+  违反 HOOKS 四·陷阱 1。挪进 `callback()`
 
 **修复**
 

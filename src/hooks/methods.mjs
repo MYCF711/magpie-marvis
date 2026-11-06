@@ -60,7 +60,9 @@ function oauthLogin(loginType, label, instructions) {
     label,
     async authorize() {
       const guid = deviceGuid()
-      const browser = findBrowser()
+      // ⚠ 不要在这里 `findBrowser()` —— 它要查 15 次注册表（实测 1.4 秒），
+      //   而 `authorize()` 必须**立刻**返回（HOOKS 四·陷阱 1）。
+      //   浏览器查找挪进 `callback`，那时才真正需要它。
       const url = authorizeUrl(loginType, guid)
 
       return {
@@ -70,6 +72,7 @@ function oauthLogin(loginType, label, instructions) {
         method: "auto",
         instructions,
         async callback(_url, _input, signal) {
+          const browser = findBrowser()
           if (!browser) {
             throw new Error(
               "没有找到可用的 Chromium 内核浏览器（Chrome / Edge / 360 / QQ 浏览器都行）。" +

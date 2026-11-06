@@ -315,52 +315,58 @@ export async function openIsolatedLogin({ browser, url, match, extraHeaders, tim
       // 导航到授权页（钩子已装好：UA / client hints / navigator.webdriver）
       await send(6, "Page.navigate", { url }).catch(() => {})
 
-      // ⚠ 不拦截、不重放、不替换页面 —— 让浏览器**自己**走完换取请求。
-      //   为什么：`marvis_oauth` 的换取依赖 (a) 浏览器 TLS 指纹（Node 的 undici 会被 WAF 400）、
-      //   (b) 同源 Cookie、(c) Referer。这三样只有「浏览器自己发」才齐全。
-      //   之前用 `Fetch.fulfillRequest` 换成静态页再在页面里 fetch，会因为执行上下文
-      //   随导航销毁而拿不到结果 —— 表现就是卡在「正在完成授权…」。
+      // ⚠⚠ 核心：`marvis_oauth` 会被**请求两次** —— QQ 的 `self_redirect` + 页面自身
+      //   的重载会让同一个 code 打两遍。第一次成功并返回 token，第二次因为 code
+      //   已被消耗而回 `-109 RC_PARAMS_INVALID`。
+      //   客户端主进程用 `[oauth-dedup]` 处理这件事（"reuse first request"）；
+      //   我们这边等价的做法是：**只认第一个响应体**，绝不去读页面最终状态。
       //
-      //   服务端换完 code 会**直接返回 token JSON**，所以只要等页面跳到回调地址、
-      //   再把 body 读出来就行。
+      //   所以：监听 `Network.responseReceived` → 命中 `marvis_oauth` →
+      //   立刻 `Network.getResponseBody` 把正文抓下来，然后马上返回。
       let nextId = 10
+      /** @type {string | null} */
+      let firstRequestId = null
+      /** @type {string} */
       let hitUrl = ""
-      let body = ""
+
+      ws.addEventListener("message", (event) => {
+        let msg
+        try {
+          msg = JSON.parse(String(event.data))
+        } catch {
+          return
+        }
+        if (msg.method === "Network.responseReceived" && !firstRequestId) {
+          const { requestId, response } = msg.params ?? {}
+          const u = String(response?.url ?? "")
+          // 只认 2xx/4xx 的**文档**响应；图片/脚本不算
+          const type = String(response?.type ?? "")
+          if (u && match.test(u) && (type === "Document" || type === "Fetch" || type === "XHR")) {
+            firstRequestId = requestId
+            hitUrl = u
+          }
+        }
+      })
 
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error("登录已取消")
 
-        let href = ""
-        try {
-          const r = await send(nextId++, "Runtime.evaluate", {
-            expression: "location.href",
-            returnByValue: true,
-          })
-          href = String(r?.result?.value ?? "")
-        } catch {
-          /* 页面正在导航 */
-        }
-
-        if (href && match.test(href)) {
-          hitUrl = href
-          // 页面可能还在渲染，多读几次直到拿到非空正文
-          for (let i = 0; i < 20; i++) {
+        if (firstRequestId) {
+          // 多试几次：responseReceived 之后 body 可能还没落盘
+          for (let i = 0; i < 15; i++) {
             try {
-              const r = await send(nextId++, "Runtime.evaluate", {
-                expression: "document.body ? document.body.innerText : ''",
-                returnByValue: true,
-              })
-              body = String(r?.result?.value ?? "")
-              if (body.trim()) break
+              const r = await send(nextId++, "Network.getResponseBody", { requestId: firstRequestId })
+              const raw = String(r?.body ?? "")
+              const body = r?.base64Encoded ? Buffer.from(raw, "base64").toString("utf8") : raw
+              if (body.trim()) return { url: hitUrl, body, browser: browser.name }
             } catch {
-              /* 还在导航 */
+              /* body 还没就绪 */
             }
-            await new Promise((r) => setTimeout(r, 400))
+            await new Promise((r) => setTimeout(r, 300))
           }
-          return { url: hitUrl, body, browser: browser.name }
         }
 
-        await new Promise((r) => setTimeout(r, 600))
+        await new Promise((r) => setTimeout(r, 500))
       }
 
     } finally {
