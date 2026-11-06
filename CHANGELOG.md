@@ -3,7 +3,18 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
-## 0.1.9 — 2026-11-06
+## 0.2.0 — 2026-11-06
+
+**修复（逆向客户端主进程后对齐）**
+
+- **换取请求改在页面上下文里发**：`yybadaccess` 的 WAF 做 TLS 指纹校验，
+  Node 的 undici（OpenSSL）和 Chromium（BoringSSL）指纹不同 ——
+  带头的请求从 Node 发出去一律 **400 空响应**。
+- **补 `Referer`**：客户端重放时会把原始请求头整份复制（`reqHeaders` / `cookies` / `referer`），
+  缺 referer 服务端判来源不合法。
+- **去掉 `Ual-Access-Businessid`**：实测它会让 WAF 直接 400（这是我这轮踩的最大坑——
+  加头反而更糟，不加头时至少还能拿到 `-109` JSON）。
+- 浏览器先开 `about:blank`、装好钩子再 `Page.navigate` —— 否则首次请求漏过去，拦截永远不触发。
 
 **修复（这是 `-109` 的真正根因）**
 
