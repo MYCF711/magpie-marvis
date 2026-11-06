@@ -87,7 +87,8 @@ function oauthLogin(loginType, label, instructions) {
             signal,
           })
 
-          const acct = parseCallback(callbackUrl, body)
+          // 拦截时 body 为空 -> parseCallback 自己拿 code + login_type 去换
+          const acct = await parseCallback(callbackUrl, body, { loginType })
           return authOf({ ...acct, guid, loginType: acct.loginType ?? LOGIN_TYPE[loginType] ?? "6" })
         },
       }

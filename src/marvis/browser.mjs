@@ -295,16 +295,21 @@ export async function openIsolatedLogin({ browser, url, match, timeoutMs = 5 * 6
         acceptLanguage: "zh-CN,zh;q=0.9",
         platform: "Win32",
       }).catch(() => {})
+      // 顺手抹掉 navigator.webdriver（比 --disable-blink-features 更干净，不带警告条）
+      await send(3, "Page.addScriptToEvaluateOnNewDocument", {
+        source: "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
+      }).catch(() => {})
+
+      // ⚠ 核心：**在跳转发生前**把回调请求拦下来。
+      //   实测 QQ 会把 redirect_uri 的查询串整个丢掉 —— 落地页收到的
+      //   `?code=...&state=...` 里**没有 login_type**，服务端直接 `-109 RC_PARAMS_INVALID`。
+      //   所以不能靠那个页面的响应，只能自己从 URL 里取 code，再带上 login_type 换一次。
+      await send(4, "Fetch.enable", {
+        patterns: [{ urlPattern: "*marvis_client_login/marvis_oauth*", requestStage: "Request" }],
+      }).catch(() => {})
 
       let nextId = 10
-
-      // ⚠ 监听 Network.responseReceived 而不是轮询 document.body：
-      //   回调页可能被 JS 自动刷新，轮询会读到**第二次**请求的响应 —— 那时 code 已被
-      //   第一次消耗掉，服务端回 `-109 RC_PARAMS_INVALID`（「授权码已被使用过」）。
-      //   所以只认**第一次**跳到回调地址的那个响应体。
-      /** @type {Map<string,string>} requestId -> url */
-      const pending = new Map()
-      /** @type {{url:string, body:string} | null} */
+      /** @type {{url:string} | null} */
       let hit = null
 
       ws.addEventListener("message", (event) => {
@@ -314,34 +319,33 @@ export async function openIsolatedLogin({ browser, url, match, timeoutMs = 5 * 6
         } catch {
           return
         }
-        if (msg.method === "Network.responseReceived") {
-          const { requestId, response } = msg.params ?? {}
-          const u = String(response?.url ?? "")
-          if (u && match.test(u)) pending.set(requestId, u)
+        if (msg.method === "Fetch.requestPaused" && !hit) {
+          const { requestId, request } = msg.params ?? {}
+          const u = String(request?.url ?? "")
+          if (u && match.test(u)) {
+            hit = { url: u }
+            // 让页面显示一句「授权完成」，避免用户对着 -109 的 JSON 发愣
+            send(nextId++, "Fetch.fulfillRequest", {
+              requestId,
+              responseCode: 200,
+              responseHeaders: [{ name: "content-type", value: "text/html; charset=utf-8" }],
+              body: Buffer.from(
+                "<!doctype html><meta charset=utf-8><title>Marvis 授权完成</title>" +
+                  "<body style=\"font:16px/1.6 system-ui;padding:48px;color:#111\">" +
+                  "<h2>授权完成</h2><p>回到 magpie 即可，窗口会自动关闭。</p></body>",
+                "utf8",
+              ).toString("base64"),
+            }).catch(() => {})
+          }
         }
       })
 
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error("登录已取消")
-
-        // 有新命中就去取 body（只取一次）
-        if (pending.size > 0 && !hit) {
-          const [requestId, u] = [...pending.entries()][0]
-          pending.delete(requestId)
-          try {
-            const r = await send(nextId++, "Network.getResponseBody", { requestId })
-            const body = String(r?.body ?? "")
-            const decoded = r?.base64Encoded ? Buffer.from(body, "base64").toString("utf8") : body
-            hit = { url: u, body: decoded }
-            break
-          } catch {
-            /* body 还没就绪，下一轮再取 */
-          }
-        }
-        await new Promise((r) => setTimeout(r, 500))
+        if (hit) return { url: hit.url, body: "", browser: browser.name }
+        await new Promise((r) => setTimeout(r, 400))
       }
 
-      if (hit) return { url: hit.url, body: hit.body, browser: browser.name }
       throw new Error("登录超时：没有等到授权回调。请在打开的窗口里完成 QQ / 微信 授权。")
     } finally {
       try {
