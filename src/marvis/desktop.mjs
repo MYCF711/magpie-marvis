@@ -215,16 +215,19 @@ export function parseLoginState(text) {
   const guid = deviceGuid()
 
   // 形态 1：cookie 串
+  // ⚠ guid 优先从**同一段内存**里取 —— 服务端按 (openid, guid, token) 三元组校验，
+  //   注册表里的值理论上一致，但内存里的这份才是这个 token 真正绑定的那个。
   const cookie = /openid=([0-9A-Fa-f]{16,64});\s*accesstoken=([^;\s]+);\s*(?:refreshtoken=([^;\s]+);\s*)?(?:logintype=([A-Za-z]+))?/
   let m = cookie.exec(text)
   if (m) {
     const expire = /access_token_expire_time=(\d{10})/.exec(text)
+    const memGuid = /guid=([0-9a-fA-F]{32})/.exec(text)
     return {
       openid: m[1],
       accessToken: m[2],
       refreshToken: m[3] || undefined,
       loginType: /^WX$/i.test(m[4] ?? "") ? "5" : "6",
-      guid,
+      guid: memGuid ? memGuid[1].toLowerCase() : guid,
       expiresAt: expire ? Number(expire[1]) * 1000 : Date.now() + 30 * 24 * 3600_000,
     }
   }

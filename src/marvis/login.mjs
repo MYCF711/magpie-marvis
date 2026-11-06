@@ -97,29 +97,27 @@ export function extractCode(input) {
  * @param {string} [state] QQ 回调带回来的 state（原样回传）
  * @returns {Promise<{ openid: string, accessToken: string, refreshToken?: string, nickname?: string, avatar?: string, loginType: string, expiresAt?: number }>}
  */
-export async function exchangeCode(code, loginType, guid, state) {
-  // ⚠ query 必须**逐字**等于 QQ 回调时的 redirect_uri 查询串 ——
-  //   QQ 在换 token 时校验 `redirect_uri` 一致性，多一个参数（比如 guid）就 `-109 RC_PARAMS_INVALID`。
-  //   guid 只在 authorize 的 state 里传递，不进这里。
+export async function exchangeCode(code, loginType, _guid, state) {
+  // ⚠⚠ 这个端点**不需要任何鉴权头**（它就是在发登录态）。
+  //   实测：带上 `Ual-Access-*` 签名头 -> **400 空响应**；不带 -> `200 {code:...}`。
+  //   所以千万别在这里复用 businessHeaders()。
+  //
+  // ⚠ query 里**只能有 login_type 和 code**：多一个参数服务端就 `-109 RC_PARAMS_INVALID`。
   const params = { login_type: loginType, code }
   if (state) params.state = String(state)
   const query = new URLSearchParams(params).toString()
-  const timestamp = String(Date.now())
-  const nonce = String(1000 + Math.floor(Math.random() * 9000))
   const url = `${REDIRECT}?${query}`
 
   const res = await fetch(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Marvis/1.60.3300.408 Chrome/152.0.7977.130 Electron/44.7.0 Safari/537.36",
-      "Ual-Access-Businessid": BUSINESS_ID,
-      "Ual-Access-Timestamp": timestamp,
-      "Ual-Access-Nonce": nonce,
-      "Ual-Access-Signature": ualSignature(query, timestamp, nonce),
-      "Ual-Access-Guid": guid,
-      "Ual-Access-Login-Type": LOGIN_TYPE[loginType] ?? "6",
+      // 伪装成 Marvis 自己的浏览器 —— 服务端按 UA 区分客户端
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
+        "Marvis/1.60.3300.408 Chrome/152.0.7977.130 Electron/44.7.0 Safari/537.36",
     },
+    signal: AbortSignal.timeout(30_000),
   })
 
   const text = await res.text()
@@ -128,7 +126,7 @@ export async function exchangeCode(code, loginType, guid, state) {
   try {
     body = JSON.parse(text)
   } catch {
-    throw new Error(`登录接口返回的不是 JSON（${res.status}）：${text.slice(0, 200)}`)
+    throw new Error(`登录接口返回的不是 JSON（HTTP ${res.status}）：${text.slice(0, 200) || "空响应"}`)
   }
 
   const info = body?.user_info ?? body?.data ?? null
@@ -139,73 +137,34 @@ export async function exchangeCode(code, loginType, guid, state) {
     const errCode = body?.code ?? res.status
     const hint =
       errCode === -109
-        ? "（RC_PARAMS_INVALID：授权码无效或已被使用过。每次登录都会拿到一个新 code，一个 code 只能换一次 token，请重新走一遍登录）"
+        ? "（RC_PARAMS_INVALID：授权码无效或已被使用过。一个 code 只能换一次 token，请重新走一遍登录）"
         : ""
     throw new Error(`登录失败（code=${errCode}）：${body?.msg ?? "未返回 access_token / openid"}${hint}`)
   }
 
-  const expire = Number(info?.access_token_expire_time ?? info?.expires_in ?? 0)
-  return {
-    openid: String(openid),
-    accessToken: String(accessToken),
-    refreshToken: info?.refresh_token ? String(info.refresh_token) : undefined,
-    nickname: info?.nick_name ? decodeURIComponent(info.nick_name) : undefined,
-    avatar: info?.head_img_url ?? undefined,
-    loginType: LOGIN_TYPE[loginType] ?? "6",
-    // 上游给的是**到期时刻**（秒）；没给就按 30 天算
-    expiresAt: expire > 1e9 ? expire * 1000 : Date.now() + 30 * 24 * 3600_000,
-  }
+  return normalize(info, accessToken, openid)
 }
 
 /**
- * 设备 guid。
+ * 从回调里拿到登录态。
  *
- * 来源：注册表 `HKCU\SOFTWARE\Tencent\Marvis\Env\svid`。
- * 服务端按 `(openid, guid, token)` 三元组校验，但 guid 是**纯客户端自报**的 ——
- * 换 guid 会 `-101 redis: nil`，所以它必须稳定，跟着 token 一起存。
+ * **主路径**（推荐，已实测）：回调请求被 CDP 在**跳转前**拦下，我们只拿到 URL，
+ * 由自己带上 `login_type` 去换 token。原因见下方 ⚠。
  *
- * 没有注册表（没装 Marvis）时，用「本机机器 id 派生」的稳定值兜底 ——
- * 同一台机器永远算出同一个，不会每次登录变。
+ * **兜底**：如果 URL 里取不到 code、但页面正文是一段 JSON（旧路径），也认。
  *
- * @returns {string} 32 位小写 hex
+ * ⚠ 为什么不能依赖那个落地页的响应：实测 QQ 会把 `redirect_uri` 的查询串
+ *   **整个丢掉** —— 落地页收到的是 `?code=...&state=...`，**没有 `login_type`**，
+ *   服务端因此返回 `-109 RC_PARAMS_INVALID`。所以必须自己取 code 再换。
+ *
+ * @param {string} callbackUrl 回调地址（含 code）
+ * @param {string} [body] 回调页正文（CDP 拦截时为空）
+ * @param {{ loginType?: string, guid?: string }} [opts]
  */
-export function deviceGuid() {
-  try {
-    // @ts-ignore —— 只在 Windows 上有
-    const { execFileSync } = require("node:child_process")
-    const out = execFileSync(
-      "reg",
-      ["query", "HKCU\\SOFTWARE\\Tencent\\Marvis\\Env", "/v", "svid"],
-      { encoding: "utf8", windowsHide: true, timeout: 3000 },
-    )
-    const m = /svid\s+REG_SZ\s+([0-9a-fA-F]{32})/.exec(out)
-    if (m) return m[1].toLowerCase()
-  } catch {
-    /* 没装 Marvis 或没有这个键，用派生值 */
-  }
-  // 兜底：机器名 + 用户名 + 平台，哈希成 32 hex。跨进程稳定。
-  const { hostname, userInfo } = require("node:os")
-  const seed = `${hostname()}|${userInfo?.().username ?? ""}|marvis`
-  return createHash("md5").update(seed).digest("hex")
-}
-
-/**
- * 从回调页里解析登录态。
- *
- * **主路径**：回调页本身就是换 token 的响应，正文是一段 JSON：
- *   `{"code":0,"msg":"","user_info":{"openid":"...","access_token":"mv_..."},"ext_info":{...}}`
- * 所以直接读正文，**不要重发请求** —— 重发就是用第二个 code，必然 `-109 RC_PARAMS_INVALID`。
- *
- * **兜底**：正文取不到（页面被拦截 / 白屏）时，从地址栏抠 code 再换一次。
- *
- * @param {string} callbackUrl 回调页地址
- * @param {string} [body] 回调页正文
- * @returns {{ openid: string, accessToken: string, refreshToken?: string, nickname?: string, avatar?: string, loginType: string, expiresAt?: number }}
- */
-export function parseCallback(callbackUrl, body) {
+export async function parseCallback(callbackUrl, body, opts = {}) {
   const text = String(body ?? "").trim()
 
-  // ① 主路径：正文就是 JSON
+  // 兜底：正文就是 JSON（旧路径）
   if (text.startsWith("{")) {
     /** @type {any} */
     let body0
@@ -216,6 +175,9 @@ export function parseCallback(callbackUrl, body) {
     }
     if (body0) {
       const biz = body0.code
+      const info = body0.user_info ?? body0.data ?? body0
+      const accessToken = info?.access_token ?? info?.accessToken
+      const openid = info?.openid ?? info?.openId ?? info?.open_id
       if (typeof biz === "number" && biz !== 0) {
         throw new Error(
           `登录失败（code=${biz}）：${body0.msg ?? "未返回用户信息"}` +
@@ -224,24 +186,18 @@ export function parseCallback(callbackUrl, body) {
               : ""),
         )
       }
-      const info = body0.user_info ?? body0.data ?? body0
-      const accessToken = info?.access_token ?? info?.accessToken
-      const openid = info?.openid ?? info?.openId ?? info?.open_id
       if (accessToken && openid) return normalize(info, accessToken, openid)
     }
   }
 
-  // ② 兜底：从地址栏抠 code 再换
+  // 主路径：从 URL 取 code，自己换
   const code = extractCode(callbackUrl)
   if (!code) {
     throw new Error(
-      `回调页没有返回登录态（正文：${text.slice(0, 160) || "空"}）。请重新走一遍登录。`,
+      `没能从回调地址里取出授权码（${String(callbackUrl).slice(0, 160) || "空"}）。请重新走一遍登录。`,
     )
   }
-  throw new Error(
-    `回调页没有直接返回 token（正文：${text.slice(0, 120) || "空"}），` +
-      `请重新走一遍登录。`,
-  )
+  return exchangeCode(code, opts.loginType ?? "QC", opts.guid, undefined)
 }
 
 /** 把上游 user_info 归一成插件内部形状 */
@@ -264,4 +220,36 @@ function safeDecode(s) {
   } catch {
     return String(s)
   }
+}
+
+/**
+ * 设备 guid。
+ *
+ * 来源：注册表 `HKCU\SOFTWARE\Tencent\Marvis\Env\svid`。
+ * 服务端按 `(openid, guid, token)` 三元组校验，但 guid 是**纯客户端自报**的 ——
+ * 换 guid 会 `-101 redis: nil`，所以它必须稳定，跟着 token 一起存。
+ *
+ * 没有注册表（没装 Marvis）时，用「本机机器名 + 用户名」派生 ——
+ * 同一台机器永远算出同一个，不会每次登录变。
+ *
+ * @returns {string} 32 位小写 hex
+ */
+export function deviceGuid() {
+  try {
+    const { execFileSync } = require("node:child_process")
+    // ⚠ 必须 String.raw：JS 里 `\S` `\T` 是**无效转义**，反斜杠会被吃掉，
+    //   传给 reg 的路径变成 `HKCUSOFTWARETencentMarvisEnv` -> 「无效参数」。
+    const out = execFileSync("reg", ["query", String.raw`HKCU\SOFTWARE\Tencent\Marvis\Env`, "/v", "svid"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 3000,
+    })
+    const m = /svid\s+REG_SZ\s+([0-9a-fA-F]{32})/.exec(out)
+    if (m) return m[1].toLowerCase()
+  } catch {
+    /* 没装 Marvis 或没有这个键，用派生值 */
+  }
+  const { hostname, userInfo } = require("node:os")
+  const seed = `${hostname()}|${userInfo?.().username ?? ""}|marvis`
+  return createHash("md5").update(seed).digest("hex")
 }
