@@ -3,7 +3,14 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
-## 0.2.5 — 2026-11-06
+## 0.2.6 — 2026-11-06
+
+**修复**
+
+- **UA 换回客户端自己的 Electron UA**（`Marvis/1.60.3300.408 ... Electron/44.7.0`）。
+  之前为了「伪装成普通浏览器」用的是纯 Chrome UA —— 服务端很可能就是按这个区分调用方
+- **去掉 `--disable-blink-features=AutomationControlled`**：它会在地址栏下面挂一条
+  「你使用的是不受支持的命令行标记」黄色警告条。`navigator.webdriver` 改用 CDP 抹掉
 
 **修复**
 
