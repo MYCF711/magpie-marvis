@@ -69,36 +69,29 @@ const DEFAULT_OUTPUT = 32_000
  *   不猜、不补。`local_model` / `warmup_model` / `*placeholder` 是内部占位，不对外。
  */
 const TABLE = [
-  // ⚠ 2026-11-06 逐槽位实测：发一次请求，读响应体的 `model` 字段。
-  //   显示名 = **真实模型名**（槽位名写进 id），这样卡片上看到的就是实际在跑什么。
+  // ⚠ 2026-11-06 逐槽位实测（每槽连发 5 次、5 种不同难度提示词，路由 100% 稳定）。
+  //   显示名 = **真实模型名**，槽位名写进 id —— 卡片上看到的就是实际在跑什么。
   // ⚠ 真实模型 id 不能直接当 `model` 传（会 400 无效模型id），只能填槽位名。
-  // ⚠ 「按任务难度自动匹配」是披露文案：实测简单/中等/困难三种提示词，main-auto 路由完全一样。
   //
-  // 已移除（上游 400 无效模型id，不是我们这边的问题）：
+  // 为什么不列 file-auto / computer-auto / browser-auto / app-auto：
+  //   前三个实测**全部**路由到 `deepseek-v4-1-flash-261017`，和 main-auto 一模一样，
+  //   列出来只会在列表里重复 4 条同名模型。main-auto 是主对话槽位，最稳定，留它一个。
+  //
+  // 已移除（上游 400 无效模型id / 500 / 空响应，不是我们这边的问题）：
   //   glm-5v-turbo-thinking · claude-opus-4-6-thinking · memory-compress · profile-request-placeholder
-  //   kimi-k2.5（500 RPC 报错）· hunyuan-2.0-instruct-20251111（空响应）
+  //   kimi-k2.5（500 RPC）· hunyuan-2.0-instruct-20251111（空响应）· venus-vision-llm（→ default）
 
-  // ── 主力：DeepSeek V4.1 Flash ─────────────────────────────────
+  // ── DeepSeek ────────────────────────────────────────────────
   ["main-auto", "deepseek-v4-1-flash-261017", 128_000, { reasoning: true, tools: true }],
-  ["file-auto", "deepseek-v4-1-flash-261017 (file)", 128_000, { reasoning: true, tools: true }],
-  ["computer-auto", "deepseek-v4-1-flash-261017 (computer)", 128_000, { reasoning: true, tools: true }],
-  ["browser-auto", "deepseek-v4-1-flash-261017 (browser)", 128_000, { reasoning: true, tools: true }],
-
-  // ── 其他 DeepSeek ────────────────────────────────────────────
   ["deepseek-v4-pro-external", "deepseek-v4-pro-202606", 128_000, { reasoning: true, tools: true }],
-  ["app-auto", "deepseek-v4-flash-202605", 200_000, { reasoning: true, tools: true }],
   ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 128_000, { reasoning: true, tools: true }],
-  ["hy3-preview-agent-real", "hy3", 128_000, { reasoning: true, tools: true }],
 
   // ── 其他厂商 ─────────────────────────────────────────────────
+  ["hy3-preview-agent-real", "hy3", 128_000, { reasoning: true, tools: true }],
   ["claude-sonnet-4-6", "claude-sonnet-4-6", 1_000_000, { reasoning: true, tools: true, vision: true }],
   ["claude-opus-4-6", "claude-opus-4-6", 1_000_000, { reasoning: true, tools: true, vision: true }],
   ["gpt-5.4", "gpt-5.4-2026-03-05", 1_000_000, { reasoning: true, tools: true, vision: true }],
   ["hunyuan-turbos-vision", "HY-Vision-2.0-instruct", 32_000, { vision: true }],
-
-  // ── 内部链路（能用但名称是服务端占位）─────────────────────────
-  ["venus-vision-llm", "default (venus)", 32_000, { reasoning: true, vision: true }],
-  ["observation-compress-model", "default (observation)", 128_000, { reasoning: true, tools: true }],
 ]
 
 /**
