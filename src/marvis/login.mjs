@@ -56,7 +56,9 @@ export function authorizeUrl(loginType, guid) {
     client_id: QQ_APP_ID,
     // ⚠ 必须带 ?login_type=QC，见 REDIRECT 上方说明
     redirect_uri: `${REDIRECT}?login_type=${loginType}`,
-    state: String(Math.floor(Math.random() * 1e9)),
+    // ⚠ 必须与 Marvis 渲染层逐字一致：`state=${Math.random()*100}`
+    //   是**小数**（如 31.1177412），不是整数。服务端会拿它做校验，格式不符会被判参数无效。
+    state: String(Math.random() * 100),
   })
   return `https://graph.qq.com/oauth2.0/authorize?${p}`
 }
@@ -228,7 +230,9 @@ function normalize(info, accessToken, openid) {
     refreshToken: info?.refresh_token ? String(info.refresh_token) : undefined,
     nickname: info?.nick_name ? safeDecode(info.nick_name) : undefined,
     avatar: info?.head_img_url ?? undefined,
-    loginType: "6",
+    // ⚠ `Ual-Access-Login-Type` 的真实取值：QC→"1"、WX/WXAPP→"2"
+    //   （渲染层 `yct={QC:"1",WX:"2",WXAPP:"2"}`）。不是 6。
+    loginType: info?.login_type === "WX" || info?.login_type === "WXAPP" ? "2" : "1",
     expiresAt: expire > 1e9 ? expire * 1000 : Date.now() + 30 * 24 * 3600_000,
   }
 }
