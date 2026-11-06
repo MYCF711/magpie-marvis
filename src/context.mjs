@@ -69,25 +69,36 @@ const DEFAULT_OUTPUT = 32_000
  *   不猜、不补。`local_model` / `warmup_model` / `*placeholder` 是内部占位，不对外。
  */
 const TABLE = [
-  // ⚠ 名字后面是**实测**的真实模型（2026-11-06，每种槽位都发过请求看响应体的 `model` 字段）
-  // ⚠ 真实模型 id 不能直接当 `model` 传（会 400 无效模型id），只能填槽位名
-  // 「按任务难度自动匹配」是披露文案：实测简单/中等/困难三种提示词，路由结果完全一样
-  ["main-auto", "DeepSeek V4.1 Flash（自动）", 128_000, { reasoning: true, tools: true }],
-  ["deepseek-v4-pro-external", "DeepSeek V4 Pro", 128_000, { reasoning: true, tools: true }],
-  ["app-auto", "DeepSeek V4 Flash（应用）", 200_000, { reasoning: true, tools: true }],
-  ["file-auto", "DeepSeek V4.1 Flash（文件）", 128_000, { reasoning: true, tools: true }],
-  ["computer-auto", "DeepSeek V4.1 Flash（电脑）", 128_000, { reasoning: true, tools: true }],
-  ["browser-auto", "DeepSeek V4.1 Flash（浏览器）", 128_000, { reasoning: true, tools: true }],
-  ["glm-5v-turbo-thinking", "GLM 5V Turbo", 200_000, { reasoning: true, tools: true, vision: true }],
-  ["claude-sonnet-4-6", "Claude Sonnet 4.6", 1_000_000, { reasoning: true, tools: true, vision: true }],
-  ["claude-opus-4-6", "Claude Opus 4.6", 1_000_000, { reasoning: true, tools: true, vision: true }],
-  ["claude-opus-4-6-thinking", "Claude Opus 4.6 Thinking", 1_000_000, { reasoning: true, tools: true, vision: true }],
-  ["gpt-5.4", "GPT-5.4", 1_000_000, { reasoning: true, tools: true, vision: true }],
-  ["hunyuan-turbos-vision", "混元 TurboS Vision", 32_000, { vision: true }],
-  ["hy3-preview-agent-real", "Hy3 预览（真实）", 128_000, { reasoning: true, tools: true }],
-  ["hy3-preview-agent", "Hy3 预览", 128_000, { reasoning: true, tools: true }],
-  ["venus-vision-llm", "Venus Vision", 32_000, { reasoning: true, vision: true }],
-  ["memory-compress", "Qwen 记忆压缩", 128_000, {}],
+  // ⚠ 2026-11-06 逐槽位实测：发一次请求，读响应体的 `model` 字段。
+  //   显示名 = **真实模型名**（槽位名写进 id），这样卡片上看到的就是实际在跑什么。
+  // ⚠ 真实模型 id 不能直接当 `model` 传（会 400 无效模型id），只能填槽位名。
+  // ⚠ 「按任务难度自动匹配」是披露文案：实测简单/中等/困难三种提示词，main-auto 路由完全一样。
+  //
+  // 已移除（上游 400 无效模型id，不是我们这边的问题）：
+  //   glm-5v-turbo-thinking · claude-opus-4-6-thinking · memory-compress · profile-request-placeholder
+  //   kimi-k2.5（500 RPC 报错）· hunyuan-2.0-instruct-20251111（空响应）
+
+  // ── 主力：DeepSeek V4.1 Flash ─────────────────────────────────
+  ["main-auto", "deepseek-v4-1-flash-261017", 128_000, { reasoning: true, tools: true }],
+  ["file-auto", "deepseek-v4-1-flash-261017 (file)", 128_000, { reasoning: true, tools: true }],
+  ["computer-auto", "deepseek-v4-1-flash-261017 (computer)", 128_000, { reasoning: true, tools: true }],
+  ["browser-auto", "deepseek-v4-1-flash-261017 (browser)", 128_000, { reasoning: true, tools: true }],
+
+  // ── 其他 DeepSeek ────────────────────────────────────────────
+  ["deepseek-v4-pro-external", "deepseek-v4-pro-202606", 128_000, { reasoning: true, tools: true }],
+  ["app-auto", "deepseek-v4-flash-202605", 200_000, { reasoning: true, tools: true }],
+  ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 128_000, { reasoning: true, tools: true }],
+  ["hy3-preview-agent-real", "hy3", 128_000, { reasoning: true, tools: true }],
+
+  // ── 其他厂商 ─────────────────────────────────────────────────
+  ["claude-sonnet-4-6", "claude-sonnet-4-6", 1_000_000, { reasoning: true, tools: true, vision: true }],
+  ["claude-opus-4-6", "claude-opus-4-6", 1_000_000, { reasoning: true, tools: true, vision: true }],
+  ["gpt-5.4", "gpt-5.4-2026-03-05", 1_000_000, { reasoning: true, tools: true, vision: true }],
+  ["hunyuan-turbos-vision", "HY-Vision-2.0-instruct", 32_000, { vision: true }],
+
+  // ── 内部链路（能用但名称是服务端占位）─────────────────────────
+  ["venus-vision-llm", "default (venus)", 32_000, { reasoning: true, vision: true }],
+  ["observation-compress-model", "default (observation)", 128_000, { reasoning: true, tools: true }],
 ]
 
 /**
