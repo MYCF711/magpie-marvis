@@ -241,7 +241,9 @@ export function parseLoginState(text) {
       openid: m[1],
       accessToken: m[2],
       refreshToken: rt?.[1],
-      loginType: "6",
+      // ⚠ `Ual-Access-Login-Type` 只认 1（QQ）/ 2（微信）—— 渲染层
+      //   `yct={QC:"1",WX:"2",WXAPP:"2"}`。这里拿不到类型，按 QQ 算（写 6 会让后续请求 401）
+      loginType: "1",
       guid,
       expiresAt: Date.now() + 30 * 24 * 3600_000,
     }

@@ -34,8 +34,8 @@ export const ACCESS_KEY = "fpzkeTlcGLVP37qiOWd29MyaOqaJYxMi"
 export const QQ_APP_ID = "1903794758"
 export const WX_APP_ID = "wxb650708317d56f88"
 
-/** 登录类型码：QC = QQ 登录，WX = 微信登录。请求头 Ual-Access-Login-Type 用的就是这个数字 */
-export const LOGIN_TYPE = { QC: "6", WX: "5" }
+/** 登录类型码：QC = QQ 登录（1），WX = 微信登录（2），对应渲染层 yct 与 Ual-Access-Login-Type */
+export const LOGIN_TYPE = { QC: "1", WX: "2" }
 
 /**
  * 发出去的 UA。

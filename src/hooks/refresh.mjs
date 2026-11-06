@@ -32,7 +32,7 @@ export function refreshHook() {
         openid: String(meta.openid ?? ""),
         accessToken: String(auth?.access ?? auth?.key ?? ""),
         guid: String(meta.guid ?? ""),
-        loginType: String(meta.loginType ?? "6"),
+        loginType: String(meta.loginType ?? "1"),
       }
       const query = new URLSearchParams({ refresh_token: refreshToken }).toString()
       const url = `${BASE}/v3/marvis_refresh_token?${query}`

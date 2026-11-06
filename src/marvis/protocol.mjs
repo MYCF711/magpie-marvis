@@ -61,7 +61,7 @@ export function llmHeaders(acct, opts = {}) {
     Authorization: "Bearer placeholder",
     "Ual-Access-Openid": acct.openid,
     "Ual-Access-Access-Token": acct.accessToken,
-    "Ual-Access-Login-Type": acct.loginType ?? "6",
+    "Ual-Access-Login-Type": acct.loginType ?? "1",
     "Ual-Access-Guid": acct.guid ?? "",
     "Marvis-AgentTag": opts.agentTag ?? "auto_discovery",
     "Marvis-Conversation-ID": opts.conversationId ?? "",
@@ -109,7 +109,7 @@ export function businessHeaders(acct, { query, method = "GET" }) {
     "Ual-Access-Signature": ualSignature(query, timestamp, nonce),
     "Ual-Access-Guid": acct.guid ?? "",
     "Ual-Access-Access-Token": acct.accessToken,
-    "Ual-Access-Login-Type": acct.loginType ?? "6",
+    "Ual-Access-Login-Type": acct.loginType ?? "1",
     "Ual-Access-Openid": acct.openid,
     ...(method === "POST" ? {} : {}),
   }
