@@ -45,10 +45,16 @@ const WIN_EXES = [
   "msedge.exe",
 ]
 
-/** 正常 Chrome 的 UA —— 不是 headless、不是 Electron、不带 Marvis 字样 */
+/**
+ * 浏览器 UA —— **必须是 Marvis 客户端自己的 Electron UA**。
+ *
+ * 一开始我用普通 Chrome UA「伪装身份」，结果服务端一律 `-109 RC_PARAMS_INVALID`。
+ * 客户端 BrowserWindow 的真实 UA 是带 `Marvis/<version>` 和 `Electron/<ver>` 的 ——
+ * 服务端按它识别调用方，缺了就判参数无效。
+ */
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
-  "Chrome/152.0.0.0 Safari/537.36"
+  "Marvis/1.60.3300.408 Chrome/152.0.7977.130 Electron/44.7.0 Safari/537.36"
 
 /** Windows 注册表 App Paths 查浏览器；查不到返回空串。 */
 export function registryAppPath(exe) {
@@ -219,8 +225,9 @@ export async function openIsolatedLogin({ browser, url, match, extraHeaders, tim
       "--disable-extensions",
       "--disable-background-networking",
       "--disable-sync",
-      // 去掉自动化痕迹（这是防风控的关键，不是可选项）
-      "--disable-blink-features=AutomationControlled",
+      // 去掉自动化痕迹。⚠ 不用 `--disable-blink-features=AutomationControlled` ——
+      //   它会在地址栏下面挂一条「你使用的是不受支持的命令行标记」警告条，很扎眼。
+      //   `navigator.webdriver` 改用 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 抹掉。
       "--exclude-switches=enable-automation",
       `--user-agent=${CHROME_UA}`,
       "--lang=zh-CN",
