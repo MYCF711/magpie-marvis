@@ -297,40 +297,51 @@ export async function openIsolatedLogin({ browser, url, match, timeoutMs = 5 * 6
       }).catch(() => {})
 
       let nextId = 10
+
+      // ⚠ 监听 Network.responseReceived 而不是轮询 document.body：
+      //   回调页可能被 JS 自动刷新，轮询会读到**第二次**请求的响应 —— 那时 code 已被
+      //   第一次消耗掉，服务端回 `-109 RC_PARAMS_INVALID`（「授权码已被使用过」）。
+      //   所以只认**第一次**跳到回调地址的那个响应体。
+      /** @type {Map<string,string>} requestId -> url */
+      const pending = new Map()
+      /** @type {{url:string, body:string} | null} */
+      let hit = null
+
+      ws.addEventListener("message", (event) => {
+        let msg
+        try {
+          msg = JSON.parse(String(event.data))
+        } catch {
+          return
+        }
+        if (msg.method === "Network.responseReceived") {
+          const { requestId, response } = msg.params ?? {}
+          const u = String(response?.url ?? "")
+          if (u && match.test(u)) pending.set(requestId, u)
+        }
+      })
+
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error("登录已取消")
-        let href = ""
-        try {
-          const r = await send(nextId++, "Runtime.evaluate", {
-            expression: "location.href",
-            returnByValue: true,
-          })
-          href = String(r?.result?.value ?? "")
-        } catch {
-          /* 页面正在跳转，下一轮再看 */
-        }
-        if (href && match.test(href)) {
-          // ⚠ 关键：回调页**本身就是换 token 的响应**（服务端直接吐 JSON）。
-          //   再发一次请求 = 用第二个 code，必然 -109。所以这里只读页面内容，不重发。
-          //   页面可能还在渲染，多读几次直到拿到非空正文。
-          let body = ""
-          for (let i = 0; i < 15; i++) {
-            try {
-              const r = await send(nextId++, "Runtime.evaluate", {
-                expression: "document.body ? document.body.innerText : ''",
-                returnByValue: true,
-              })
-              body = String(r?.result?.value ?? "")
-              if (body.trim()) break
-            } catch {
-              /* 页面还在导航 */
-            }
-            await new Promise((r) => setTimeout(r, 400))
+
+        // 有新命中就去取 body（只取一次）
+        if (pending.size > 0 && !hit) {
+          const [requestId, u] = [...pending.entries()][0]
+          pending.delete(requestId)
+          try {
+            const r = await send(nextId++, "Network.getResponseBody", { requestId })
+            const body = String(r?.body ?? "")
+            const decoded = r?.base64Encoded ? Buffer.from(body, "base64").toString("utf8") : body
+            hit = { url: u, body: decoded }
+            break
+          } catch {
+            /* body 还没就绪，下一轮再取 */
           }
-          return { url: href, body, browser: browser.name }
         }
-        await new Promise((r) => setTimeout(r, 800))
+        await new Promise((r) => setTimeout(r, 500))
       }
+
+      if (hit) return { url: hit.url, body: hit.body, browser: browser.name }
       throw new Error("登录超时：没有等到授权回调。请在打开的窗口里完成 QQ / 微信 授权。")
     } finally {
       try {
