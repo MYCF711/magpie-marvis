@@ -300,16 +300,14 @@ export async function openIsolatedLogin({ browser, url, match, timeoutMs = 5 * 6
         source: "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
       }).catch(() => {})
 
-      // ⚠ 核心：**在跳转发生前**把回调请求拦下来。
-      //   实测 QQ 会把 redirect_uri 的查询串整个丢掉 —— 落地页收到的
-      //   `?code=...&state=...` 里**没有 login_type**，服务端直接 `-109 RC_PARAMS_INVALID`。
-      //   所以不能靠那个页面的响应，只能自己从 URL 里取 code，再带上 login_type 换一次。
-      await send(4, "Fetch.enable", {
-        patterns: [{ urlPattern: "*marvis_client_login/marvis_oauth*", requestStage: "Request" }],
-      }).catch(() => {})
-
-      let nextId = 10
-      /** @type {{url:string} | null} */
+      // ⚠ 让浏览器**正常走完**回调请求（带 Cookie、带正确的 redirect_uri），
+      //   我们只读**第一个**响应的正文。不拦截、不重发 ——
+      //   拦截后用 Node 的 fetch 重放会丢掉 Cookie，服务端就回 `-109`。
+      /** @type {string | null} */
+      let hitRequestId = null
+      /** @type {string} */
+      let hitUrl = ""
+      /** @type {{url:string, body:string} | null} */
       let hit = null
 
       ws.addEventListener("message", (event) => {
@@ -319,30 +317,32 @@ export async function openIsolatedLogin({ browser, url, match, timeoutMs = 5 * 6
         } catch {
           return
         }
-        if (msg.method === "Fetch.requestPaused" && !hit) {
-          const { requestId, request } = msg.params ?? {}
-          const u = String(request?.url ?? "")
+        if (msg.method === "Network.responseReceived" && !hitRequestId) {
+          const { requestId, response } = msg.params ?? {}
+          const u = String(response?.url ?? "")
           if (u && match.test(u)) {
-            hit = { url: u }
-            // 让页面显示一句「授权完成」，避免用户对着 -109 的 JSON 发愣
-            send(nextId++, "Fetch.fulfillRequest", {
-              requestId,
-              responseCode: 200,
-              responseHeaders: [{ name: "content-type", value: "text/html; charset=utf-8" }],
-              body: Buffer.from(
-                "<!doctype html><meta charset=utf-8><title>Marvis 授权完成</title>" +
-                  "<body style=\"font:16px/1.6 system-ui;padding:48px;color:#111\">" +
-                  "<h2>授权完成</h2><p>回到 magpie 即可，窗口会自动关闭。</p></body>",
-                "utf8",
-              ).toString("base64"),
-            }).catch(() => {})
+            hitRequestId = requestId
+            hitUrl = u
           }
         }
       })
 
+      let nextId = 10
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error("登录已取消")
-        if (hit) return { url: hit.url, body: "", browser: browser.name }
+
+        if (hitRequestId && !hit) {
+          try {
+            const r = await send(nextId++, "Network.getResponseBody", { requestId: hitRequestId })
+            const raw = String(r?.body ?? "")
+            const body = r?.base64Encoded ? Buffer.from(raw, "base64").toString("utf8") : raw
+            if (body.trim()) hit = { url: hitUrl, body }
+          } catch {
+            /* body 还没就绪，下一轮再取 */
+          }
+        }
+        if (hit) return { url: hit.url, body: hit.body, browser: browser.name }
+
         await new Promise((r) => setTimeout(r, 400))
       }
 
