@@ -175,3 +175,52 @@ test("native 目录 4 个文件必须都在（缺一个就静默返回 null）",
     assert.ok(existsSync(join(dir, f)), `native/${f} 必须打包（否则 getUskey() 静默返回 null）`)
   }
 })
+
+test("config() 合并：用户改过的值优先，插件只补缺", async () => {
+  const { mergeModels } = await import("../src/hooks/config.mjs")
+  const { staticModels } = await import("../src/context.mjs")
+  const defaults = staticModels()
+
+  // 用户把 main-auto 的上下文改成 2M，并删掉了 hunyuan-turbos-vision
+  const user = defaults
+    .filter((m) => m.id !== "hunyuan-turbos-vision")
+    .map((m) => (m.id === "main-auto" ? { ...m, limit: { ...m.limit, context: 2_000_000 } } : m))
+
+  const merged = mergeModels(defaults, user)
+  const main = merged.find((m) => m.id === "main-auto")
+
+  assert.equal(main.limit.context, 2_000_000, "用户设的 2M 必须保留")
+  assert.equal(typeof main.limit.output, "number", "用户没改的 output 不能被吃掉")
+  assert.ok(merged.some((m) => m.id === "hunyuan-turbos-vision"), "默认表里有、用户没有的模型要追加回来")
+})
+
+test("config() 已有 provider 时不重置用户配置", async () => {
+  const { MarvisAuthPlugin } = await import("../index.mjs")
+  const plugin = await MarvisAuthPlugin({})
+  const cfg = {
+    provider: {
+      marvis: {
+        name: "我改的名字",
+        npm: "@ai-sdk/openai-compatible",
+        api: "https://custom.example.com/v1",
+        models: [
+          {
+            id: "main-auto",
+            name: "我的 V4.1 Flash",
+            limit: { context: 2_000_000, output: 64_000 },
+            modalities: { input: ["text"], output: ["text"] },
+            tool_call: true,
+            attachment: false,
+            reasoning: true,
+          },
+        ],
+      },
+    },
+  }
+  await plugin.config(cfg)
+  const p = cfg.provider.marvis
+  assert.equal(p.name, "我改的名字", "provider 名不能被我覆盖")
+  assert.equal(p.api, "https://custom.example.com/v1", "api 不能被我覆盖")
+  assert.equal(p.models.find((m) => m.id === "main-auto").limit.context, 2_000_000, "上下文不能被我覆盖")
+  assert.equal(p.models.find((m) => m.id === "main-auto").name, "我的 V4.1 Flash")
+})

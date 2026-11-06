@@ -69,6 +69,8 @@ const DEFAULT_OUTPUT = 32_000
  *   不猜、不补。`local_model` / `warmup_model` / `*placeholder` 是内部占位，不对外。
  */
 const TABLE = [
+  // ⚠ 上下文窗口：实测 main-auto 发 400,000 字符（190,511 tokens）返回 200，
+  //   已远超 config_defaults.yaml 声明的 128k —— 所以按 1M 声明（用户要求，出问题再调）。
   // ⚠ 2026-11-06 逐槽位实测（每槽连发 5 次、5 种不同难度提示词，路由 100% 稳定）。
   //   显示名 = **真实模型名**，槽位名写进 id —— 卡片上看到的就是实际在跑什么。
   // ⚠ 真实模型 id 不能直接当 `model` 传（会 400 无效模型id），只能填槽位名。
@@ -82,12 +84,12 @@ const TABLE = [
   //   kimi-k2.5（500 RPC）· hunyuan-2.0-instruct-20251111（空响应）· venus-vision-llm（→ default）
 
   // ── DeepSeek ────────────────────────────────────────────────
-  ["main-auto", "deepseek-v4-1-flash-261017", 128_000, { reasoning: true, tools: true }],
-  ["deepseek-v4-pro-external", "deepseek-v4-pro-202606", 128_000, { reasoning: true, tools: true }],
-  ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 128_000, { reasoning: true, tools: true }],
+  ["main-auto", "deepseek-v4-1-flash-261017", 1_000_000, { reasoning: true, tools: true }],
+  ["deepseek-v4-pro-external", "deepseek-v4-pro-202606", 1_000_000, { reasoning: true, tools: true }],
+  ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 1_000_000, { reasoning: true, tools: true }],
 
   // ── 其他厂商 ─────────────────────────────────────────────────
-  ["hy3-preview-agent-real", "hy3", 128_000, { reasoning: true, tools: true }],
+  ["hy3-preview-agent-real", "hy3", 1_000_000, { reasoning: true, tools: true }],
   ["claude-sonnet-4-6", "claude-sonnet-4-6", 1_000_000, { reasoning: true, tools: true, vision: true }],
   ["claude-opus-4-6", "claude-opus-4-6", 1_000_000, { reasoning: true, tools: true, vision: true }],
   ["gpt-5.4", "gpt-5.4-2026-03-05", 1_000_000, { reasoning: true, tools: true, vision: true }],
