@@ -176,12 +176,19 @@ export async function exchangeCode(code, loginType, _guid, state) {
 export async function parseCallback(callbackUrl, body, opts = {}) {
   const text = String(body ?? "").trim()
 
-  // 兜底：正文就是 JSON（旧路径）
-  if (text.startsWith("{")) {
+  // 主路径：正文就是 JSON。
+  // ⚠ 不能只看 `startsWith("{")` —— 浏览器渲染 `application/json` 时会加缩进/包装，
+  //   也可能前后带空白。改成「抠第一个 `{` 到最后一个 `}`」再解析。
+  const jsonText = (() => {
+    const a = text.indexOf("{")
+    const b = text.lastIndexOf("}")
+    return a >= 0 && b > a ? text.slice(a, b + 1) : ""
+  })()
+  if (jsonText) {
     /** @type {any} */
     let body0
     try {
-      body0 = JSON.parse(text)
+      body0 = JSON.parse(jsonText)
     } catch {
       body0 = null
     }
