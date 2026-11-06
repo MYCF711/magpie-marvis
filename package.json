@@ -1,0 +1,69 @@
+{
+  "name": "magpie-marvis",
+  "version": "0.1.0",
+  "description": "magpie / OpenCode provider plugin for Tencent Marvis: its DeepSeek V4 Pro, Kimi K2.5, Claude Opus/Sonnet 4.6, GPT-5.4 and Hunyuan models through the Marvis model gateway — no API key to paste, sign in with QQ or WeChat.",
+  "type": "module",
+  "main": "./index.mjs",
+  "exports": "./index.mjs",
+  "files": [
+    "index.mjs",
+    "src",
+    "native",
+    "README.md",
+    "README-TEMPLATE.md",
+    "AGENTS.md",
+    "CHECKLIST.md",
+    "HOOKS.md",
+    "UPDATING.md",
+    "CHANGELOG.md",
+    "MULTI-PROVIDER.md",
+    "NOTICE.md",
+    "LICENSE",
+    "extract-contract.py",
+    "registry-entry.json",
+    "tests",
+    "scripts",
+    "examples",
+    "GUIDE.md",
+    "OFFICIAL-SOURCES.md",
+    "SCORING.md",
+    "CONTRIBUTING.md"
+  ],
+  "keywords": [
+    "magpie",
+    "magpie-plugin",
+    "opencode",
+    "opencode-plugin",
+    "opencode-auth",
+    "provider",
+    "marvis",
+    "tencent",
+    "deepseek"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "magpie": {
+    "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjggMTI4Ij48cmVjdCB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgcng9IjI4IiBmaWxsPSIjMWYyOTM3Ii8+PHRleHQgeD0iNjQiIHk9Ijg0IiBmb250LXNpemU9IjU2IiBmb250LWZhbWlseT0ic3lzdGVtLXVpLHNhbnMtc2VyaWYiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IiM2MGE1ZmEiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk08L3RleHQ+PC9zdmc+",
+    "maxConcurrency": 2,
+    "name": "腾讯 Marvis TENCENT"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node scripts/check.mjs",
+    "create": "node scripts/create.mjs",
+    "release": "node scripts/release.mjs",
+    "score": "node scripts/score.mjs",
+    "maintenance": "node scripts/check-maintenance.mjs",
+    "publish:npm": "node scripts/publish-npm.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MYCF711/magpie-marvis.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MYCF711/magpie-marvis/issues"
+  },
+  "homepage": "https://github.com/MYCF711/magpie-marvis#readme"
+}
