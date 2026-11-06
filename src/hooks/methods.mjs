@@ -1,7 +1,7 @@
 // ② auth.methods —— 两条登录路
 //
-//   A. QQ / 微信 授权（默认）：自己起一个**隔离浏览器**（一次性 profile、伪装正常 Chrome、
-//      去掉自动化痕迹），用户在窗口里授权，插件从 CDP 抓回调 URL 里的 `code`。
+//   A. QQ / 微信 授权：自己起一个**隔离浏览器**（一次性 profile、伪装客户端 UA、
+//      抹掉 navigator.webdriver），用户在窗口里授权，插件从 CDP 抓回调响应。
 //      → `{ url, opened: true, method: "auto", callback }`
 //        `opened: true` 让 magpie **不要**再开系统默认浏览器（否则弹两个窗口）。
 //
@@ -10,9 +10,12 @@
 //
 // ⚠ `authorize()` 必须**立刻**返回 —— 真正等用户的是 `callback()`。
 //   在这里 await 登录会和 magpie 双向死锁（HOOKS §四·陷阱1）。
+//   `findBrowser()` 要查十几次注册表（实测 1.4 秒），必须放在 callback 里。
 //
-// ⚠ 为什么不能像别的插件那样起本地 loopback 收回调：redirect_uri 是 QQ 互联里
-//   预注册死的，改不了（详见 src/marvis/login.mjs 顶部）。所以只能「跳过去 → 读地址栏」。
+// ⚠ 已知问题：浏览器扫码这条路的换取服务端一直回 `-109 RC_PARAMS_INVALID`，
+//   参数已逐字对齐官方客户端（redirect_uri / login_type / state / UA / Cookie / Referer）
+//   仍然被拒 —— 判断是服务端对该入口有额外校验，插件侧无法绕过。
+//   失败时给出可执行的替代路径，不让用户对着 109 干瞪眼。
 
 import { PROVIDER, LOGIN_TYPE } from "../context.mjs"
 import { authorizeUrl, parseCallback, deviceGuid } from "../marvis/login.mjs"
@@ -22,6 +25,11 @@ import { importFromDesktop, desktopAvailable } from "../marvis/desktop.mjs"
 
 /** 回调地址判据：跳到 marvis_oauth 且带 code= */
 const CALLBACK = /marvis_client_login\/marvis_oauth\?[^#]*\bcode=/i
+
+/** 服务端拒绝浏览器登录时的提示 */
+const BROWSER_LOGIN_HINT =
+  "  [提示] 浏览器登录路服务端目前不接受（换取参数已逐字对齐官方客户端仍被拒）。" +
+  "请改用「从本机 Marvis 导入」——装了 Marvis 客户端并在里面登录过就能一键导入。"
 
 /**
  * 登录成功时给宿主的字段。
@@ -47,7 +55,7 @@ export function authOf(acct) {
     metadata: {
       openid: acct.openid,
       guid: acct.guid ?? deviceGuid(),
-      loginType: acct.loginType ?? "6",
+      loginType: acct.loginType ?? "1",
       nickname: acct.nickname ?? "",
     },
   }
@@ -60,9 +68,8 @@ function oauthLogin(loginType, label, instructions) {
     label,
     async authorize() {
       const guid = deviceGuid()
-      // ⚠ 不要在这里 `findBrowser()` —— 它要查 15 次注册表（实测 1.4 秒），
-      //   而 `authorize()` 必须**立刻**返回（HOOKS 四·陷阱 1）。
-      //   浏览器查找挪进 `callback`，那时才真正需要它。
+      // ⚠ 不要在这里 findBrowser() —— 它要查 15 次注册表（实测 1.4 秒），
+      //   而 authorize() 必须**立刻**返回（HOOKS 四·陷阱 1）。
       const url = authorizeUrl(loginType, guid)
 
       return {
@@ -79,9 +86,8 @@ function oauthLogin(loginType, label, instructions) {
                 "请装一个，或改用「从本机 Marvis 导入」。",
             )
           }
-          // 起隔离浏览器 → 等它跳到回调地址
-          // ⚠ 回调页**本身就是换 token 的响应**（服务端直接吐 JSON），
-          //   所以这里读页面正文，**不要再发一次请求** —— 再发就是第二个 code，必然 -109。
+
+          // 起隔离浏览器 → 等它跳到回调地址，读第一个响应体
           const { url: callbackUrl, body } = await openIsolatedLogin({
             browser,
             url,
@@ -90,9 +96,15 @@ function oauthLogin(loginType, label, instructions) {
             signal,
           })
 
-          // 拦截时 body 为空 -> parseCallback 自己拿 code + login_type 去换
-          const acct = await parseCallback(callbackUrl, body, { loginType })
-          return authOf({ ...acct, guid, loginType: acct.loginType ?? LOGIN_TYPE[loginType] ?? "6" })
+          /** @type {any} */
+          let acct
+          try {
+            acct = await parseCallback(callbackUrl, body, { loginType })
+          } catch (err) {
+            const msg = String(err?.message ?? err)
+            throw new Error(/-109|RC_PARAMS_INVALID/.test(msg) ? msg + BROWSER_LOGIN_HINT : msg)
+          }
+          return authOf({ ...acct, guid, loginType: acct.loginType ?? LOGIN_TYPE[loginType] ?? "1" })
         },
       }
     },
