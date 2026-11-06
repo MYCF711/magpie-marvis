@@ -226,7 +226,7 @@ export function parseLoginState(text) {
       openid: m[1],
       accessToken: m[2],
       refreshToken: m[3] || undefined,
-      loginType: /^WX$/i.test(m[4] ?? "") ? "5" : "6",
+      loginType: /^WX/i.test(m[4] ?? "") ? "2" : "1",
       guid: memGuid ? memGuid[1].toLowerCase() : guid,
       expiresAt: expire ? Number(expire[1]) * 1000 : Date.now() + 30 * 24 * 3600_000,
     }
