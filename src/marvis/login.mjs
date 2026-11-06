@@ -93,11 +93,17 @@ export function extractCode(input) {
  *
  * @param {string} code
  * @param {"QC" | "WX"} loginType
- * @param {string} guid
+ * @param {string} guid 只用于 `Ual-Access-Guid` 请求头
+ * @param {string} [state] QQ 回调带回来的 state（原样回传）
  * @returns {Promise<{ openid: string, accessToken: string, refreshToken?: string, nickname?: string, avatar?: string, loginType: string, expiresAt?: number }>}
  */
-export async function exchangeCode(code, loginType, guid) {
-  const query = new URLSearchParams({ login_type: loginType, code, guid }).toString()
+export async function exchangeCode(code, loginType, guid, state) {
+  // ⚠ query 必须**逐字**等于 QQ 回调时的 redirect_uri 查询串 ——
+  //   QQ 在换 token 时校验 `redirect_uri` 一致性，多一个参数（比如 guid）就 `-109 RC_PARAMS_INVALID`。
+  //   guid 只在 authorize 的 state 里传递，不进这里。
+  const params = { login_type: loginType, code }
+  if (state) params.state = String(state)
+  const query = new URLSearchParams(params).toString()
   const timestamp = String(Date.now())
   const nonce = String(1000 + Math.floor(Math.random() * 9000))
   const url = `${REDIRECT}?${query}`
@@ -130,8 +136,12 @@ export async function exchangeCode(code, loginType, guid) {
   const openid = info?.openid ?? info?.openId ?? info?.open_id
 
   if (!accessToken || !openid) {
-    const code = body?.code ?? res.status
-    throw new Error(`登录失败（code=${code}）：${body?.msg ?? "未返回 access_token / openid"}`)
+    const errCode = body?.code ?? res.status
+    const hint =
+      errCode === -109
+        ? "（RC_PARAMS_INVALID：授权码无效或已被使用过。每次登录都会拿到一个新 code，一个 code 只能换一次 token，请重新走一遍登录）"
+        : ""
+    throw new Error(`登录失败（code=${errCode}）：${body?.msg ?? "未返回 access_token / openid"}${hint}`)
   }
 
   const expire = Number(info?.access_token_expire_time ?? info?.expires_in ?? 0)
@@ -177,4 +187,81 @@ export function deviceGuid() {
   const { hostname, userInfo } = require("node:os")
   const seed = `${hostname()}|${userInfo?.().username ?? ""}|marvis`
   return createHash("md5").update(seed).digest("hex")
+}
+
+/**
+ * 从回调页里解析登录态。
+ *
+ * **主路径**：回调页本身就是换 token 的响应，正文是一段 JSON：
+ *   `{"code":0,"msg":"","user_info":{"openid":"...","access_token":"mv_..."},"ext_info":{...}}`
+ * 所以直接读正文，**不要重发请求** —— 重发就是用第二个 code，必然 `-109 RC_PARAMS_INVALID`。
+ *
+ * **兜底**：正文取不到（页面被拦截 / 白屏）时，从地址栏抠 code 再换一次。
+ *
+ * @param {string} callbackUrl 回调页地址
+ * @param {string} [body] 回调页正文
+ * @returns {{ openid: string, accessToken: string, refreshToken?: string, nickname?: string, avatar?: string, loginType: string, expiresAt?: number }}
+ */
+export function parseCallback(callbackUrl, body) {
+  const text = String(body ?? "").trim()
+
+  // ① 主路径：正文就是 JSON
+  if (text.startsWith("{")) {
+    /** @type {any} */
+    let body0
+    try {
+      body0 = JSON.parse(text)
+    } catch {
+      body0 = null
+    }
+    if (body0) {
+      const biz = body0.code
+      if (typeof biz === "number" && biz !== 0) {
+        throw new Error(
+          `登录失败（code=${biz}）：${body0.msg ?? "未返回用户信息"}` +
+            (biz === -109
+              ? "（授权码无效或已被使用过 —— 一个 code 只能换一次 token，请重新走一遍登录）"
+              : ""),
+        )
+      }
+      const info = body0.user_info ?? body0.data ?? body0
+      const accessToken = info?.access_token ?? info?.accessToken
+      const openid = info?.openid ?? info?.openId ?? info?.open_id
+      if (accessToken && openid) return normalize(info, accessToken, openid)
+    }
+  }
+
+  // ② 兜底：从地址栏抠 code 再换
+  const code = extractCode(callbackUrl)
+  if (!code) {
+    throw new Error(
+      `回调页没有返回登录态（正文：${text.slice(0, 160) || "空"}）。请重新走一遍登录。`,
+    )
+  }
+  throw new Error(
+    `回调页没有直接返回 token（正文：${text.slice(0, 120) || "空"}），` +
+      `请重新走一遍登录。`,
+  )
+}
+
+/** 把上游 user_info 归一成插件内部形状 */
+function normalize(info, accessToken, openid) {
+  const expire = Number(info?.access_token_expire_time ?? info?.expires_in ?? 0)
+  return {
+    openid: String(openid),
+    accessToken: String(accessToken),
+    refreshToken: info?.refresh_token ? String(info.refresh_token) : undefined,
+    nickname: info?.nick_name ? safeDecode(info.nick_name) : undefined,
+    avatar: info?.head_img_url ?? undefined,
+    loginType: "6",
+    expiresAt: expire > 1e9 ? expire * 1000 : Date.now() + 30 * 24 * 3600_000,
+  }
+}
+
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(String(s))
+  } catch {
+    return String(s)
+  }
 }
