@@ -312,117 +312,57 @@ export async function openIsolatedLogin({ browser, url, match, extraHeaders, tim
         source: "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
       }).catch(() => {})
 
-      // ⚠⚠ 核心：**在跳转发生前**拦下回调，然后在**页面上下文里**发换取请求。
+      // 导航到授权页（钩子已装好：UA / client hints / navigator.webdriver）
+      await send(6, "Page.navigate", { url }).catch(() => {})
+
+      // ⚠ 不拦截、不重放、不替换页面 —— 让浏览器**自己**走完换取请求。
+      //   为什么：`marvis_oauth` 的换取依赖 (a) 浏览器 TLS 指纹（Node 的 undici 会被 WAF 400）、
+      //   (b) 同源 Cookie、(c) Referer。这三样只有「浏览器自己发」才齐全。
+      //   之前用 `Fetch.fulfillRequest` 换成静态页再在页面里 fetch，会因为执行上下文
+      //   随导航销毁而拿不到结果 —— 表现就是卡在「正在完成授权…」。
       //
-      //   为什么不能从 Node 发：`yybadaccess` 的 WAF 做 **TLS 指纹**校验 ——
-      //   Node 的 undici（OpenSSL）和 Chromium（BoringSSL）指纹不同，
-      //   带 `Ual-Access-MarvisExt` 的请求从 Node 发出去一律 **400 空响应**。
-      //   在页面里 `fetch` 出去 = Chromium 的 TLS 栈 + 同源 Cookie，服务端才认。
-      await send(6, "Fetch.enable", {
-        patterns: [{ urlPattern: "*marvis_client_login/marvis_oauth*", requestStage: "Request" }],
-      }).catch(() => {})
-
-      // 钩子装好，现在才导航到授权页
-      await send(7, "Page.navigate", { url }).catch(() => {})
-
+      //   服务端换完 code 会**直接返回 token JSON**，所以只要等页面跳到回调地址、
+      //   再把 body 读出来就行。
       let nextId = 10
-      /** @type {string | null} */
-      let pausedId = null
-      /** @type {string} */
-      let pausedUrl = ""
-
-      ws.addEventListener("message", (event) => {
-        let msg
-        try {
-          msg = JSON.parse(String(event.data))
-        } catch {
-          return
-        }
-        if (msg.method === "Fetch.requestPaused" && !pausedId) {
-          const { requestId, request } = msg.params ?? {}
-          const u = String(request?.url ?? "")
-          if (u && match.test(u)) {
-            pausedId = requestId
-            pausedUrl = u
-          }
-        }
-      })
+      let hitUrl = ""
+      let body = ""
 
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error("登录已取消")
-        if (pausedId) break
-        await new Promise((r) => setTimeout(r, 400))
-      }
-      if (!pausedId) {
-        throw new Error("登录超时：没有等到授权回调。请在打开的窗口里完成 QQ / 微信 授权。")
-      }
 
-      // 先把挂起的导航放行（用一张静态页顶掉，避免页面白屏），再在页面里换
-      await send(nextId++, "Fetch.fulfillRequest", {
-        requestId: pausedId,
-        responseCode: 200,
-        responseHeaders: [{ name: "content-type", value: "text/html; charset=utf-8" }],
-        body: Buffer.from(
-          '<!doctype html><meta charset="utf-8"><title>Marvis</title>' +
-            '<body style="font:16px/1.6 system-ui;padding:48px;color:#111">' +
-            "<h2>正在完成授权…</h2><p>回到 magpie 即可。</p></body>",
-          "utf8",
-        ).toString("base64"),
-      }).catch(() => {})
-
-      // 在页面上下文里发换取请求（Chromium 的 TLS 指纹 + 同源 Cookie + 注入的头）
-      //
-      // ⚠ 还要补 `Referer`：客户端主进程重放时会把**原始请求头**整份复制过去
-      //   （字符串表里的 `reqHeaders` / `cookies` / `referer` / `ALL_REQ_HEADERS`），
-      //   其中 referer 是 QQ 授权页本身的地址。缺它服务端会判来源不合法。
-      //   fetch 的 Referer 属于禁止头，只能走 CDP 注入。
-      try {
-        const origin = new URL(pausedUrl).origin
-        await send(nextId++, "Network.setExtraHTTPHeaders", {
-          headers: { Referer: `${origin}/oauth2.0/show?which=Login&display=pc` },
-        })
-      } catch {
-        /* 注入失败不致命，继续试 */
-      }
-
-      const exchangeUrl = pausedUrl
-      const expr = `(async () => {
-        try {
-          const r = await fetch(${JSON.stringify(exchangeUrl)}, {
-            method: "GET",
-            credentials: "include",
-            headers: { "Accept": "application/json" },
-          });
-          return JSON.stringify({ __status: r.status, __body: await r.text() });
-        } catch (e) {
-          return JSON.stringify({ __error: String(e && e.message || e) });
-        }
-      })()`
-
-      /** @type {any} */
-      let out = null
-      for (let i = 0; i < 20; i++) {
+        let href = ""
         try {
           const r = await send(nextId++, "Runtime.evaluate", {
-            expression: expr,
-            awaitPromise: true,
+            expression: "location.href",
             returnByValue: true,
           })
-          const raw = r?.result?.value
-          if (raw) {
-            out = JSON.parse(String(raw))
-            break
-          }
+          href = String(r?.result?.value ?? "")
         } catch {
-          /* 页面还在导航 */
+          /* 页面正在导航 */
         }
-        await new Promise((r) => setTimeout(r, 500))
+
+        if (href && match.test(href)) {
+          hitUrl = href
+          // 页面可能还在渲染，多读几次直到拿到非空正文
+          for (let i = 0; i < 20; i++) {
+            try {
+              const r = await send(nextId++, "Runtime.evaluate", {
+                expression: "document.body ? document.body.innerText : ''",
+                returnByValue: true,
+              })
+              body = String(r?.result?.value ?? "")
+              if (body.trim()) break
+            } catch {
+              /* 还在导航 */
+            }
+            await new Promise((r) => setTimeout(r, 400))
+          }
+          return { url: hitUrl, body, browser: browser.name }
+        }
+
+        await new Promise((r) => setTimeout(r, 600))
       }
 
-      if (!out) throw new Error("换取登录态超时：页面里没能完成请求。请重新走一遍登录。")
-      if (out.__error) throw new Error(`页面内换取失败：${out.__error}`)
-
-      return { url: exchangeUrl, body: String(out.__body ?? ""), browser: browser.name }
     } finally {
       try {
         ws.close()
