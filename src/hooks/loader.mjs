@@ -70,7 +70,7 @@ export function loaderHook() {
         // ⚠ 每次都要重新算头：uskey 是一次性的
         let headers
         try {
-          headers = llmHeaders(creds, {
+          headers = await llmHeaders(creds, {
             scene: "preload_summary",
             agentTag: "auto_discovery",
           })

@@ -3,6 +3,33 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.15 — 2026-11-07
+
+**新增（Linux / macOS：远程签名服务）**
+
+> 以前只有 Windows 能跑，因为 `native/` 是 PE/DLL。现在把「签 uskey」这一步拆成
+> 一个 HTTP 服务，magpie 可以在 Linux 服务器、容器、NAS 里跑，签名交给
+> 一台 Windows（或 Linux + Wine）。
+
+- 新增 `tools/beacon-signer/`：`signer.js`（`GET /health` `/uskey` `/uskeys?n=` `/qimei`）、
+  `run-wine.sh`（自动下 node.exe、建 wineprefix、把 Wine 版本改成 win10）、
+  `marvis-beacon.service`（systemd 单元）、README（三种部署方式 + 自检）
+- `src/native.mjs`：设 `MARVIS_BEACON_URL` 时**不再 require 本地 `native/`**，
+  `newUskey()` / `qimei36()` 改走 HTTP；`qimei36` 在插件侧缓存 6 小时
+  （同设备稳定，避免每个请求都打签名服务）；signer 不可用时错误带地址
+- `src/marvis/protocol.mjs`：`marvisExt` / `llmHeaders` 改 async（远程签名需要 await），
+  `src/hooks/loader.mjs` 同步 await
+- **行为不变**：没设 `MARVIS_BEACON_URL` 时完全走原来的本地加载路径，Windows 用户无感
+- 新增 `tests/remote-signer.test.mjs`（9 例：不碰本地二进制 / business 透传 /
+  空 uskey 必须抛 / qimei 缓存与降级 / 无 URL 时回到 native 路径）与
+  `tests/signer-http.test.mjs`（7 例：接口形状、`n` 上限、`served` 计数）
+- `BEACON_STUB=1` 可让 signer 用假签名跑通链路，自检与 CI 不需要那 4 个 Windows 文件
+
+**说明**
+
+- 远程模式下 uskey 带的是**签名机器**的 qimei36，不是 magpie 主机的
+- signer 无鉴权，只签不存凭据；请绑内网地址，别开公网
+
 ## 0.2.14 — 2026-11-07
 
 **修复（微信账号登录态被踢下线）**

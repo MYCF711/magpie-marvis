@@ -88,9 +88,38 @@ native/beacon_wrapper.dll    Windows 适配层
 - **非官方**：Marvis 随时可能改协议。改了就提 issue。
 - **登录态 30 天**：`refresh` 会**成对轮换** token，旧的立刻失效。插件已经串行化了刷新
   （同账号同时只允许一次），但如果你在 Marvis 客户端里也登录同一个号，两边会互相打掉。
-- **只支持 Windows**：Beacon SDK 只有 Windows 二进制。
+- **Beacon SDK 只有 Windows 二进制**：Linux / macOS 用远程签名服务跑（见下节），
+  或直接跑在装了 Wine 的 Linux 上。
 - **`/v1/chat/completions` 不需要 UAL 签名**：那是 `/v3/*` 业务接口的事。把签名头加到模型
   网关上会从 `403 风控` 变成 `401 登录态过期`。
+
+## 在 Linux / 服务器上用（远程签名）
+
+`native/` 是 PE/DLL，Linux 上 `require` 会报 `invalid ELF header`。想在 Linux（容器、VPS、CI）
+里跑，就把签名这件事交给一台能跑 Windows 二进制的机器 —— 原生 Windows，或者 **Linux + Wine**：
+
+```bash
+# Linux 上（需要 wine64；首次会从 npmmirror 下 node.exe，约 700 MB 依赖）
+sudo apt-get install -y --no-install-recommends wine64
+./tools/beacon-signer/run-wine.sh          # 默认监听 127.0.0.1:9024
+```
+
+然后给 magpie 加一个环境变量，插件就不碰本地 `native/` 了：
+
+```yaml
+environment:
+  MARVIS_BEACON_URL: "http://172.17.0.1:9024"   # signer 地址（容器里用 docker 网关）
+```
+
+细节、systemd 单元、接口契约见 [`tools/beacon-signer/`](./tools/beacon-signer/)。
+自检（不需要 SDK）：
+
+```bash
+BEACON_STUB=1 node tools/beacon-signer/signer.js
+curl -s localhost:9024/health
+```
+
+> uskey 带着**那台机器**的 qimei36，且 signer 本身没有鉴权 —— 只绑内网、别开公网。
 
 ## 开发
 

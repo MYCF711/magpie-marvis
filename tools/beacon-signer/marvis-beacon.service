@@ -1,0 +1,34 @@
+# Linux（Wine）下的 beacon signer 服务单元
+#
+# 安装：
+#   sudo cp tools/beacon-signer/marvis-beacon.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now marvis-beacon
+# 日志（Wine 下 node 不写 stdout，只写文件）：
+#   tail -f /opt/marvis-signer/signer.log
+#
+# 路径按实际部署改；插件侧对应 MAGPIE 容器的 MARVIS_BEACON_URL。
+
+[Unit]
+Description=Marvis Beacon signer (Windows SDK under Wine)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/marvis-signer
+Environment=WINEPREFIX=/opt/marvis-signer/wineprefix
+Environment=WINEARCH=win64
+Environment=WINEDEBUG=-all
+Environment=WINEDLLOVERRIDES=mscoree,mshtml=
+Environment=SIGNER_HOST=172.17.0.1
+Environment=SIGNER_PORT=9024
+Environment=BEACON_NATIVE_DIR=/opt/marvis-signer/native
+# wine 默认报 win7，node 会拒绝启动
+ExecStartPre=-/usr/lib/wine/wine64 reg add "HKCU\\Software\\Wine" /v Version /d win10 /f
+ExecStart=/usr/lib/wine/wine64 /opt/marvis-signer/node-win/node.exe /opt/marvis-signer/signer.js
+Restart=always
+RestartSec=3
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

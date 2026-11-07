@@ -23,12 +23,12 @@ import { newUskey, qimei36 } from "../native.mjs"
  * @param {{ guid: string, clientVersion?: string }} acct
  * @returns {string} 紧凑 JSON（不能有空格，服务端按原文字符串校验）
  */
-export function marvisExt(acct) {
+export async function marvisExt(acct) {
   return JSON.stringify({
-    qimei36: qimei36(),
+    qimei36: await qimei36(),
     osVersion: "Windows-10-10.0.26200",
     guid: acct.guid ?? "",
-    uskey: newUskey(BUSINESS_ID),
+    uskey: await newUskey(BUSINESS_ID),
     nonce: randomUUID(),
     reqScene: 1,
     taskType: "user",
@@ -44,8 +44,8 @@ export function marvisExt(acct) {
  * @param {{ scene?: string, agentTag?: string, conversationId?: string, responseId?: string }} [opts]
  * @returns {Record<string, string>}
  */
-export function llmHeaders(acct, opts = {}) {
-  const ext = marvisExt(acct)
+export async function llmHeaders(acct, opts = {}) {
+  const ext = await marvisExt(acct)
   return {
     Accept: "application/json",
     "Content-Type": "application/json",
