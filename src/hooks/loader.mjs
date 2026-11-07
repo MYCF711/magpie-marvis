@@ -44,7 +44,7 @@ function credsOf(auth) {
     openid: String(meta.openid ?? auth?.uid ?? ""),
     accessToken: String(auth?.access ?? auth?.key ?? ""),
     guid: String(meta.guid ?? ""),
-    loginType: String(meta.loginType ?? "6"),
+    loginType: String(meta.loginType ?? "1"),
   }
 }
 

@@ -246,7 +246,9 @@ export function parseLoginState(text) {
       openid: m[1],
       accessToken: m[2],
       refreshToken: rt?.[1],
-      loginType: "6",
+      // ⚠ 只认 1（QQ）/ 2（微信）—— 渲染层 yct={QC:"1",WX:"2",WXAPP:"2"}。
+      //   JSON 形态拿不到类型，按 QQ 算；写 6 会让后续请求 401
+      loginType: "1",
       guid,
       // 形态 2 读不到 logintype —— 保守按最短 TTL（微信 2 小时），
       // 第一次续期就会用上游真实的 expires_in 修正

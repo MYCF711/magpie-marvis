@@ -44,7 +44,7 @@ export function usageHook() {
       openid: String(meta.openid ?? ""),
       accessToken: String(auth?.access ?? auth?.key ?? ""),
       guid: String(meta.guid ?? ""),
-      loginType: String(meta.loginType ?? "6"),
+      loginType: String(meta.loginType ?? "1"),
     }
     if (!acct.accessToken || !acct.openid) {
       return { error: "尚未登录 Marvis", windows: [] }

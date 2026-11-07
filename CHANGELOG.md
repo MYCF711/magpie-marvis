@@ -33,6 +33,21 @@
 - 新增 `src/marvis/expiry.mjs` 统一「绝对秒 / 绝对毫秒 / 相对秒 / 兜底」四分支，
   登录（`login.mjs`）、导入（`desktop.mjs`）、续期（`refresh.mjs`）三处共用
 
+**修复（登录类型兜底）**
+
+- `Ual-Access-Login-Type` 只认 **`1`（QQ）/ `2`（微信）** —— 渲染层
+  `yct={QC:"1",WX:"2",WXAPP:"2"}`。五处兜底默认值 `6` 改成 `1`：
+  `protocol.mjs` 两处（`llmHeaders` / `businessHeaders`）、`loader.mjs`、`usage.mjs`、
+  `desktop.mjs` 的 JSON 形态。写 6 会让「拿不到 loginType 的账号」在后续请求里
+  带错类型（`Ual-Access-Login-Type: 6` 不存在）→ 401
+
+**文档**
+
+- README 新增「**计费 / 额度**」小节：`total_tokens` / `used_tokens` / `avail_tokens` /
+  `frozen_tokens` 四个字段的含义与占比公式
+- README 登录说明改成「自动打开隔离浏览器、授权完自己关掉，不用复制 URL」——
+  浏览器登录从 0.2.2 起就自动抓回调了
+
 **实测（2026-11-07）**
 
 - 五个账号（3 QQ + 2 微信）全部续期 `code:0`，续期后打 `/v1/chat/completions` 全部 **200**
