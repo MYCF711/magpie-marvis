@@ -1,9 +1,6 @@
 // 虚拟设备 —— 给每个账号一个独立的设备标识
 //
-// ⚠ 实测结论：Marvis 上游把 token 绑定在 `guid` 上，不是 qimei36 / nonce：
-//   · 同一 token + 原 guid → 200
-//   · 同一 token + 随机 guid → 401
-//   · 同一 token + 随机 qimei36 / nonce（guid 不变）→ 200
+// ⚠ token 与 `guid` 绑定：换掉 guid 会掉登录态。
 //
 // 客户端默认所有账号共用本机 `svid`，所以**新号登录会把旧号顶掉**
 // （同一 guid 只保留一个有效登录态）。给每个账号分配独立 guid，

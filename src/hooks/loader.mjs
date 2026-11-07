@@ -77,8 +77,8 @@ export function loaderHook() {
         } catch (err) {
           return errorResponse(
             503,
-            "native_unavailable",
-            `签名依赖不可用：${err?.message ?? err}。请确认插件 native/ 目录下的 4 个文件都在。`,
+            "header_unavailable",
+            `请求头构造失败：${err?.message ?? err}`,
           )
         }
 

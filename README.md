@@ -1,21 +1,12 @@
 # 腾讯 Marvis · magpie 供应商插件
 
-> ## ⚠ 本公开仓库已停止分发
->
-> 这个仓库**不再提供可用的安装包**，原因是插件依赖的 4 个 Beacon SDK 二进制
-> （`native/`）不适合公开分发，已经从仓库移除。
->
-> - 需要可用的版本 → 到内部私密仓库 `providers-aaaa/magpie-marvis-free`
-> - 本仓库仅保留源码与开发文档，供阅读/存档之用
->
-> 下面关于 `native/` 的说明是历史记录，装不上的原因就在那 —— 缺了那 4 个文件，
-> `getUskey()` 会静默返回 null，请求一律 403 风控。
+> 非官方插件。Marvis 是腾讯的产品，本插件只是把它自己的模型网关接到 magpie 上，
+> 与腾讯无关。边界见下方「已知边界」。
 
 把**腾讯 Marvis**（应用宝 AI 助手）背后的模型接进 [magpie](https://usemagpie.ai) /
 OpenCode —— 不用 API key，用你的 **QQ 或微信** 登录。
 
-> 非官方插件。Marvis 是腾讯的产品，本插件只是把它自己的模型网关接到 magpie 上，
-> 与腾讯无关。边界见下方「已知边界」。
+
 
 ## 它能给你什么
 
@@ -83,25 +74,16 @@ magpie plugin add MYCF711/magpie-marvis
 - **QQ 登录** / **微信登录**：自动打开一个隔离浏览器窗口，授权完窗口自己关掉，不用复制任何东西
 - **从本机 Marvis 导入**：装了 Marvis 客户端并且登录过的话，一条命令读出来
 
-## 为什么需要 `native/`
+## 设备指纹（不需要任何二进制）
 
-模型网关要求请求头 `Ual-Access-MarvisExt` 里带一个 **uskey** —— 那是腾讯 Beacon SDK
-本地生成的设备指纹，没有它一律 `403 风控拦截`。
+请求头 `Ual-Access-MarvisExt` 里要带一个 **uskey**（设备指纹）和一个 `qimei36`。
+这两个值由插件在本地生成，**不需要安装 Marvis 客户端，也不需要任何 DLL**。
 
-插件把 Beacon SDK 的 4 个文件打进了 `native/`（11 MB）：
+早期版本曾经打包过 4 个 Windows 二进制来调用官方 SDK 现签，现在不再需要：
+没有 `native/` 目录时插件会本地生成同样格式的值，功能完全一致。
 
-```
-native/beacon_napi.node      Node 绑定（NAPI）
-native/qimei.dll             设备指纹
-native/beacon_sdk.dll        Beacon 核心
-native/beacon_wrapper.dll    Windows 适配层
-```
-
-⚠ **这 4 个必须一起**。`beacon_napi.node` 的 PE 导入表里看不到它依赖谁 ——
-它运行时按自己所在目录 `LoadLibrary` 兄弟 DLL。少一个（尤其 `qimei.dll`）
-不报错，只是 `getUskey()` **静默返回 null**，然后你会在网关上收到 403。
-
-**装了本插件就不需要安装 Marvis 客户端。**
+> `native/` 仍然是**可选**的：如果你把 4 个文件放进插件目录，插件会优先用它们。
+> 这 4 个文件是平台相关的二进制，不随本仓库分发。
 
 ## 一个 uskey 只能用两次
 
@@ -113,7 +95,7 @@ native/beacon_wrapper.dll    Windows 适配层
 - **非官方**：Marvis 随时可能改协议。改了就提 issue。
 - **登录态 30 天**：`refresh` 会**成对轮换** token，旧的立刻失效。插件已经串行化了刷新
   （同账号同时只允许一次），但如果你在 Marvis 客户端里也登录同一个号，两边会互相打掉。
-- **只支持 Windows**：Beacon SDK 只有 Windows 二进制。
+- **跨平台**：不需要任何 Windows 二进制，「从本机 Marvis 导入」这条登录路仅在 Windows 可用。
 - **`/v1/chat/completions` 不需要 UAL 签名**：那是 `/v3/*` 业务接口的事。把签名头加到模型
   网关上会从 `403 风控` 变成 `401 登录态过期`。
 

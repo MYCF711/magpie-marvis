@@ -12,7 +12,7 @@
 
 import { createHash, randomUUID } from "node:crypto"
 import { ACCESS_KEY, BUSINESS_ID, CLIENT, BROWSER_UA, BASE } from "../context.mjs"
-import { newUskey, qimei36 } from "../native.mjs"
+import { uskeyOf, qimei36 } from "./fingerprint.mjs"
 
 /**
  * 模型网关要求的 `Ual-Access-MarvisExt` 值。
@@ -24,11 +24,13 @@ import { newUskey, qimei36 } from "../native.mjs"
  * @returns {string} 紧凑 JSON（不能有空格，服务端按原文字符串校验）
  */
 export function marvisExt(acct) {
+  // qimei36 要求与设备一致：拿不到真值就整条字段不发，不要用占位值代替。
+  const qimei = qimei36()
   return JSON.stringify({
-    qimei36: qimei36(),
+    ...(qimei ? { qimei36: qimei } : {}),
     osVersion: "Windows-10-10.0.26200",
     guid: acct.guid ?? "",
-    uskey: newUskey(BUSINESS_ID),
+    uskey: uskeyOf(BUSINESS_ID),
     nonce: randomUUID(),
     reqScene: 1,
     taskType: "user",
