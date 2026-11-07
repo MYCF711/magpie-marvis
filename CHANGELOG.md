@@ -3,6 +3,47 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.14 — 2026-11-07
+
+**修复（微信账号登录态被踢下线）**
+
+> 五个根因叠在一起，缺一个都修不好。前四条让续期「调不通」，第五条让续期「根本进不去」。
+
+- **`auth.refresh` 的签名写错了（最致命）**：magpie 的续期钩子是
+  `refresh(auth, provider)` —— 第一个参数是**账号对象**；只有
+  `loader` / `usage` / `checkin` 才收 `getAuth` 函数。
+  0.2.13 及以前写成 `async (getAuth) => getAuth()`，magpie 实测报
+  `plugin [error]: auth.refresh: getAuth is not a function.
+  (In 'getAuth()', 'getAuth' is an instance of Object)` ——
+  **续期一次都没跑起来过**，30 秒重试、无限循环。现在两种传法都认
+- **续期端点调错了**：以前调 `GET /v3/marvis_refresh_token?refresh_token=…`，
+  该端点恒定回 `-109 RefreshToken missing required param (openid, guid, token)` ——
+  **续期从来没成功过**。真实端点是 `POST /marvis_client_login/marvis_refresh_token`，
+  body `{"userInfo":{openId,refreshToken,accessToken,loginType:"Marvis"}}`
+- **微信 token 只有 2 小时**（`expires_in=7200`，QQ 是 ≈30 天 = `2591962`）：
+  旧代码把 `expires_in` 当成「不是绝对时间戳」直接回退 30 天，于是**从不主动续期**。
+  微信账号登录完几小时就 401「登录态过期/未登录」，QQ 只是 30 天没走完所以看不出来
+- **`refresh_token` 空串覆盖**：续期响应里 `refresh_token` 回 `""`，`??` 不回退，
+  存成空串后下次 `if (!refreshToken) return {}` 直接短路 —— 即使端点对了也永不续期
+- **`-109` 被误判成登录失效**：它表示「参数检查未通过」（插件自身问题），
+  标 `signIn: "expired"` 会让 magpie 把好账号标成「需要重新登录」。
+  现在只有 `-107`（`RC_NO_AUTH_ERR`）/ `-101`（会话不存在）才标
+- `refreshLead` 从 **24 小时**改为 **5 分钟**：24 小时对 2 小时的微信 token 意味着
+  「从登录那刻起就永远该刷新」
+- 新增 `src/marvis/expiry.mjs` 统一「绝对秒 / 绝对毫秒 / 相对秒 / 兜底」四分支，
+  登录（`login.mjs`）、导入（`desktop.mjs`）、续期（`refresh.mjs`）三处共用
+
+**实测（2026-11-07）**
+
+- 五个账号（3 QQ + 2 微信）全部续期 `code:0`，续期后打 `/v1/chat/completions` 全部 **200**
+- 续期**不换** `access_token`（响应与请求同值），只重置有效期；
+  `metadata.openid` / `guid` / `refresh_token` 全部保留
+- 修复前：两个微信账号 401 `{"code":4100403,"msg":"客户端通用错误:登录态过期/未登录"}`
+- 修复后在**运行中的 magpie** 上复验：把过期账号的 `expires` 拨到过去 → 发一次请求 →
+  magpie 自动续期并写回 `plugin-auth.json`（`expires` 变成 +2 小时），请求 **200**；
+  五个账号现在全部有效
+- 顺带：`auth.refresh` 的错误不再污染 magpie 日志（此前每 30 秒一条 `getAuth is not a function`）
+
 ## 0.2.13 — 2026-11-06
 
 **修复（工具调用 400 invalid parameter）**

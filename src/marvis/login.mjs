@@ -18,6 +18,7 @@
 
 import { BASE, QQ_APP_ID, WX_APP_ID, BUSINESS_ID, LOGIN_TYPE } from "../context.mjs"
 import { ualSignature } from "./protocol.mjs"
+import { expiresAtOf, ttlFor } from "./expiry.mjs"
 import { createHash } from "node:crypto"
 import { createRequire } from "node:module"
 
@@ -408,7 +409,6 @@ export async function parseCallback(callbackUrl, body, opts = {}) {
  * @param {{ guid?: string, appid?: string, scope?: string, isLocked?: boolean }} [extra]
  */
 function normalize(info, accessToken, openid, extra = {}) {
-  const expire = Number(info?.access_token_expire_time ?? info?.expires_in ?? 0)
   const nickname = info?.nick_name ? safeDecode(info.nick_name) : ""
   return {
     openid: String(openid),
@@ -420,8 +420,10 @@ function normalize(info, accessToken, openid, extra = {}) {
     // ⚠ `Ual-Access-Login-Type` 的真实取值：QC→"1"、WX/WXAPP→"2"
     //   （渲染层 `yct={QC:"1",WX:"2",WXAPP:"2"}`）。不是 6。
     loginType: loginTypeCode(info?.login_type),
-    // 秒（10 位）→ 毫秒；已经是毫秒就原样；都没有就按 30 天
-    expiresAt: expire > 1e12 ? expire : expire > 1e9 ? expire * 1000 : Date.now() + 30 * 24 * 3600_000,
+    // ⚠ 别再用 `> 1e9` 三目：`expires_in` 是**相对秒数**（微信只有 7200 = 2 小时），
+    //   被判成「不是绝对时间戳」后回退 30 天 —— 微信 token 2 小时就过期，插件却以为还有 30 天。
+    //   统一走 expiresAtOf（绝对/相对/兜底三分支）。
+    expiresAt: expiresAtOf(info, { fallbackMs: ttlFor(loginTypeCode(info?.login_type)) }),
     // 落盘用：guid 必须与换取时那个**同一个**（后续请求要靠它做设备标识）
     ...(extra.guid ? { guid: String(extra.guid) } : {}),
     ...(extra.appid ? { appid: String(extra.appid) } : {}),

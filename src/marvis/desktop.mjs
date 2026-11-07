@@ -23,6 +23,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { deviceGuid } from "./login.mjs"
+import { WX_TTL_MS, ttlFor } from "./expiry.mjs"
 
 /** 探查本机是否有 Marvis 客户端在跑 */
 export async function desktopAvailable() {
@@ -228,7 +229,11 @@ export function parseLoginState(text) {
       refreshToken: m[3] || undefined,
       loginType: /^WX/i.test(m[4] ?? "") ? "2" : "1",
       guid: memGuid ? memGuid[1].toLowerCase() : guid,
-      expiresAt: expire ? Number(expire[1]) * 1000 : Date.now() + 30 * 24 * 3600_000,
+      // cookie 里带 logintype，拿不到真实 expires_in 时按登录方式兜底
+      // （微信只有 2 小时，共用 30 天会让微信账号 2 小时后 401）
+      expiresAt: expire
+        ? Number(expire[1]) * 1000
+        : Date.now() + ttlFor(/^WX/i.test(m[4] ?? "") ? "2" : "1"),
     }
   }
 
@@ -243,7 +248,9 @@ export function parseLoginState(text) {
       refreshToken: rt?.[1],
       loginType: "6",
       guid,
-      expiresAt: Date.now() + 30 * 24 * 3600_000,
+      // 形态 2 读不到 logintype —— 保守按最短 TTL（微信 2 小时），
+      // 第一次续期就会用上游真实的 expires_in 修正
+      expiresAt: Date.now() + WX_TTL_MS,
     }
   }
   return null
