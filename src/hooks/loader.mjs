@@ -9,8 +9,9 @@
 // ⚠ 实测：把 UAL 签名头（md5 body+ts+accessKey+nonce）加到模型网关上是**错的** ——
 //   会从 403 风控变成 401 登录态过期。那套只用于 /v3/*。
 
-import { BASE_V1, DEFAULT_MODEL } from "../context.mjs"
+import { BASE_V1, DEFAULT_MODEL, canonicalModelId } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
+import { normalizeTools } from "../marvis/tool-schema.mjs"
 
 /** 上游说「模型不行」的措辞 */
 const MODEL_ISSUE =
@@ -85,9 +86,41 @@ export function loaderHook() {
         const merged = { ...(init?.headers ?? {}) }
         for (const [k, v] of Object.entries(headers)) merged[k] = v
 
+        // ⚠ 旧路由里模型 ID 是数组下标 `"0"…"7"`，上游只认槽位名。
+        //   在这里做一次归一，旧路由不改配置也能继续用。
+        let body = init?.body
+        if (typeof body === "string") {
+          try {
+            const json = JSON.parse(body)
+            let changed = false
+            const canonical = canonicalModelId(json.model)
+            if (canonical !== json.model) {
+              json.model = canonical
+              changed = true
+            }
+            // Marvis 要求每个工具 parameters 显式 type:"object"；
+            // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
+            const tools = normalizeTools(json.tools)
+            if (tools !== json.tools) {
+              json.tools = tools
+              changed = true
+            }
+            if (changed) {
+              body = JSON.stringify(json)
+              // body 变了，长度头必须去掉，让 fetch 重新算
+              delete merged["content-length"]
+              delete merged["Content-Length"]
+              delete merged["content-encoding"]
+              delete merged["Content-Encoding"]
+            }
+          } catch {
+            /* 不是 JSON 就原样转发 */
+          }
+        }
+
         let response
         try {
-          response = await fetch(url, { ...init, headers: merged })
+          response = await fetch(url, { ...init, ...(body === init?.body ? {} : { body }), headers: merged })
         } catch (err) {
           return errorResponse(503, "upstream_unreachable", `连不上 Marvis 网关：${err?.message ?? err}`)
         }

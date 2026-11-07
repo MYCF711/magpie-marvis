@@ -3,6 +3,103 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.13 — 2026-11-06
+
+**修复（工具调用 400 invalid parameter）**
+
+- Marvis 要求每个 `tools[].function.parameters` 显式带 `type: "object"`；
+  DSH 的部分工具（如 `bash`）省略了它，**只要有一个工具缺 type，整次请求就 400**
+- `loader` 现在递归补齐缺失的 `type:"object"`，不动 `properties` / `required` /
+  `additionalProperties`；不改变工具名和行为
+- 已用 DSH 当时的完整请求（57 个工具 + `reasoning_effort` + 流式）复放：
+  修复前 400 `invalid parameter`，修复后 **200 流式工具调用**
+
+## 0.2.12 — 2026-11-06
+
+**修复（路由显示真实模型名）**
+
+- 模型条目的 `id` 改成**真实模型名**（`deepseek-v4-1-flash-261017` 等），
+  `apiId` 保留上游槽位名（`main-auto`）—— 路由/卡片不再显示 `0` 或 `main-auto`
+- `loader` 同时认三种写法：真实模型名、旧槽位名、旧数字下标，统一映射到上游槽位；
+  已实测 `model:"0"` 与 `model:"deepseek-v4-1-flash-261017"` 都返回 200
+- 旧路由由升级脚本迁移 `marvis/0 → marvis/main-auto → marvis/<真实模型名>`；
+  不迁移时 loader 仍兼容旧引用
+
+## 0.2.11 — 2026-11-06
+
+**修复（模型目录真正按槽位名）**
+
+- `config.models` / `provider.models` 改成**对象表，键是槽位名**（`main-auto` 等），
+  并给 `provider.models` 补上 `api.id`。此前是数组，magpie 会存成下标 `"0"…"7"`，
+  路由里只显示 `0`，请求发 `model:"0"` 上游 400
+- 旧数组形态在 `config` 合并时按 TABLE 顺序自动认回槽位名，用户改过的名字/上下文/能力保留
+- `loader` 的数字 ID 兼容映射保留：即使路由组里还写着 `marvis/0`，也能正常调用
+- 账号名继续带 `QQ·` / `微信·` 前缀（旧账号点刷新或重登后生效）
+
+**升级提示**
+
+- 安装后点一次「重新获取模型」，路由里把旧的 `0` 重新选成
+  `deepseek-v4.1-flash-261017`，之后显示真实名称；不重选时 `0` 仍可用（loader 已兼容）
+
+## 0.2.10 — 2026-11-06
+
+**修复**
+
+- **旧路由 `model:"0"` 报 `400 无效模型 id`**：0.2.x 的 `config.models` 是数组，
+  magpie 把它持久化成下标 `"0"…"7"`，路由组引用 `marvis/0`，请求体就发 `"0"`。
+  `loader` 现在把纯数字 ID 按 TABLE 顺序归一成槽位名（`0 → main-auto`），
+  **旧路由不改配置即可继续用**
+- **账号名前缀**：卡片名变成 `QQ·昵称` / `微信·昵称`，同名的 QQ/微信账号可以直接区分；
+  旧账号点一次刷新（或重登）后生效
+- 昵称/头像在登录、本机导入、刷新时统一通过签名 POST 获取，拿不到就留空
+
+**说明**
+
+- 路由页仍显示 `0`，是 0.2.x 数组模型 ID 的历史存量。本次优先保兼容、**不迁移路由组**
+  （迁移要把 `marvis/0` 改成 `marvis/main-auto`，会动到用户现有路由）。
+  需要显示真实名称时再做单独迁移。
+
+## 0.2.9 — 2026-11-06
+
+**新增（多账号并行）**
+
+- **每个账号独立设备 `guid`（虚拟设备）**：扫码登录时生成新的 32 位 guid 并随账号保存，
+  后续请求、刷新、额度查询都用该账号自己的 guid。此前所有账号共用本机 `svid`，
+  上游同一 guid 只保留一个有效登录态，**新号登录会把旧号顶掉**（旧号随后 401）
+- 登录过程中用 OAuth `state` 关联本次 guid，按 state 分开暂存，并发登录不会串号
+- 本机导入仍使用客户端自己的 `svid`，保持与本机 Marvis 一致
+- **账号名显示 QQ 昵称**：登录、本机导入、刷新时用签名 POST 取 `nick_name` / 头像并落盘；
+  拿不到就留空，不编造。QQ 号拿不到（`openid` 是应用内 ID，不是 QQ 号）
+
+**实测依据**
+
+- 同一 token：原 guid → 200；随机 guid → 401；随机 `qimei36` / `nonce`（guid 不变）→ 200
+  —— 绑定的是 guid，不是其他指纹
+
+## 0.2.8 — 2026-11-06
+
+**修复（根因，已实机验证）**
+
+- **浏览器扫码登录 `-109 RC_PARAMS_INVALID` 的根因是换取时没带设备 `guid`**。
+  实测：缺 guid → 恒定 `-109`；补 `Ual-Access-Guid`（或 `.qq.com` 的 `guid` cookie）后，
+  死码立即变 `-107 RC_NO_AUTH_ERR` —— 参数检查发生在 code 校验之前。
+  0.2.2～0.2.7 里「redirect_uri / 两次请求 / code 已消费 / UA / TLS」的解释均不成立，以本节为准
+- **成功响应是 302 + Set-Cookie，不是 JSON**：改为 `redirect: "manual"`，
+  从 `openid / accesstoken / refreshtoken / logintype / nickname / head_img_url /
+  access_token_expire_time / appid / scope / is_locked` 还原账号
+- **CDP 在 Request 阶段拦截回调**（`Fetch.requestPaused` + `Fetch.fulfillRequest` 静态完成页），
+  浏览器不再把 code 发出去；监听器与钩子全部在 `Page.navigate` 之前安装
+- **修正 `Network.responseReceived` 的资源类型读取位置**：类型在 `msg.params.type`，
+  不在 `response.type`；原条件永不成立
+- **回调 `state` 原样保留**并随换取请求回传；`guid` 不再在兜底路径变成 `undefined`
+- **`-109` / `-107` 文案按实测更正**：`-109` = 参数检查未通过（最常见缺 guid），
+  `-107` = 参数已通过但 code 无效/过期/已消费，都不是账号密码错误
+
+**实机验证**
+
+- QQ 扫码 → 隔离浏览器拦截 → Node 带 guid 换取成功：`uid=<已脱敏>`，拿到 access + refresh
+- 用新凭据调用 `main-auto`：HTTP 200，`model=deepseek-v4-1-flash-261017`，内容 `"OK"`
+
 ## 0.2.7 — 2026-11-06
 
 **修复**
