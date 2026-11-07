@@ -11,6 +11,7 @@
 import { createRefreshLock } from "../refresh-lock.mjs"
 import { BASE } from "../context.mjs"
 import { businessHeaders } from "../marvis/protocol.mjs"
+import { fetchUserProfile, accountLabel } from "../marvis/profile.mjs"
 
 const lock = createRefreshLock()
 
@@ -61,11 +62,25 @@ export function refreshHook() {
       }
 
       // ⚠ **合并**语义：只给新字段会覆盖掉 metadata 里的 openid/guid（AGENTS 坑 4）
+      // 顺手补一次昵称（老账号升级后卡片上还是一串 key，点刷新就能变成 QQ 昵称）
+      let profile = null
+      try {
+        profile = await fetchUserProfile(
+          { ...acct, accessToken: String(access), refreshToken: String(refresh) },
+          { loginType: meta.loginType === "2" ? "WX" : "QC" },
+        )
+      } catch {
+        /* 昵称拿不到不影响续期 */
+      }
+      const nickname = profile?.nickname ?? meta.nickname
+      const label = accountLabel(nickname, meta.loginType)
       return {
         access: String(access),
         refresh: String(refresh),
         expires: expire > 1e9 ? expire * 1000 : Date.now() + 30 * 24 * 3600_000,
-        metadata: { ...meta },
+        ...(label ? { accountId: label } : {}),
+        ...(profile?.avatar ? { avatar: profile.avatar } : {}),
+        metadata: { ...meta, ...(nickname ? { nickname: String(nickname) } : {}) },
       }
     })
   }

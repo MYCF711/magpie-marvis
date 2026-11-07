@@ -7,8 +7,8 @@
 // ⚠ 伪装浏览器身份（防风控拦截）：
 //   · `--disable-blink-features=AutomationControlled` —— 去掉 `navigator.webdriver`
 //   · 不传 `--enable-automation` / `--headless` —— 有头窗口，且不带自动化提示条
-//   · `Network.setUserAgentOverride` 把 UA 换成正常 Chrome，并补齐
-//     `Accept-Language` / `sec-ch-ua` —— 只改 UA 不改 client hints 会被指纹比对出来
+//   · `Network.setUserAgentOverride` 换成 Marvis 客户端自己的 Electron UA，
+//     并补齐 `Accept-Language` / client hints —— 官方请求就是这套身份
 //   · 一次性 profile，每次都是「全新机器」，不会因为历史 Cookie 被判定异常
 //
 // 设计取舍来自 WPS 灵犀 0.4.11 的实测实现（MIT；见 NOTICE.md）：
@@ -17,8 +17,26 @@
 //   · Windows 的候选顺序：Chrome → 国产 Chromium → Edge 最后（Edge 策略最多、最容易被组织禁用）。
 //   · 退出码不可靠：浏览器可能把调试参数吞掉，所以以「CDP 端口能不能连上」为准。
 //
-// ⚠ 只读页面 URL，不读 Cookie、不注入脚本；窗口关闭后临时 profile 会被删掉。
+// ═══ 回调怎么抓 ═════════════════════════════════════════════════════
+// `marvis_oauth` 的成功形态是 **302 + Set-Cookie**，换取要求带**本机 guid**。
+//   · 缺 guid → `-109 RC_PARAMS_INVALID`（实测；参数检查在 code 校验之前）；
+//   · 带 guid 但 code 已被消费 → `-107 RC_NO_AUTH_ERR`。
+//
+// 所以在 **Request 阶段**就把回调停住：不让浏览器把 code 用掉，交给 Node 带 guid
+// 换唯一那一次。这也是官方成功路径的等价实现。
+//
+// 正确做法（也是本模块唯一的正确路径）：
+//   1. `Fetch.enable` + `{ urlPattern, requestStage: "Request" }` —— 请求**发出去之前**就停住；
+//   2. 拿到暂停事件的 URL（里面带 `code=`），`Fetch.fulfillRequest` 喂一张静态完成页，
+//      浏览器永远不发出这个请求，code 保持未使用；
+//   3. 把 URL 交给调用方，由 Node **带 guid 换一次**。
+//
+// ⚠ 所有钩子（`Network.*` / `Page.addScriptToEvaluateOnNewDocument` / `Fetch.enable`）
+//   必须在 `Page.navigate` **之前**装好；监听器同理 —— 装晚了首次请求就漏过去，
+//   拦截永远不触发（先开 `about:blank` 就是为了这个）。
+//
 // ⚠ 本模块不依赖任何第三方包；Node 22+ 的全局 WebSocket 足够。
+// ⚠ 只读页面 URL，不读 Cookie、不注入脚本；窗口关闭后临时 profile 会被删掉。
 
 import { spawn } from "node:child_process"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
@@ -55,6 +73,74 @@ const WIN_EXES = [
 const CHROME_UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) " +
   "Marvis/1.60.3300.408 Chrome/152.0.7977.130 Electron/44.7.0 Safari/537.36"
+
+/** 回调端点的路径片段 —— 「这是不是回调」的兜底判据（`match` 没命中时用） */
+const CALLBACK_PATH = "marvis_client_login/marvis_oauth"
+
+/** 默认拦截模式：CDP 的 `urlPattern`（`*` = 任意长度）。调用方可以另给 */
+export const DEFAULT_CALLBACK_PATTERN = "*marvis_oauth*"
+
+/**
+ * 静态完成页 —— 回调被拦下后由 CDP 直接**合成**一个响应喂给浏览器。
+ *
+ * 为什么必须合成：不能 continue 让浏览器真发出去（见文件头）。页面只负责告诉用户
+ * 「授权完成了」，真正的换取在 Node 里做。故意不含任何 JSON —— 正文不参与解析。
+ */
+export const COMPLETE_PAGE = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>授权完成</title>
+<style>
+  html,body{margin:0;height:100%;background:#f6f7f9;color:#1a1a1a;
+    font:16px/1.6 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{height:100%;display:flex;align-items:center;justify-content:center}
+  .card{background:#fff;border:1px solid #e6e8eb;border-radius:14px;padding:36px 44px;
+    box-shadow:0 12px 32px rgba(0,0,0,.06);text-align:center;max-width:420px}
+  .tick{font-size:44px;line-height:1}
+  h1{font-size:20px;margin:14px 0 8px;font-weight:600}
+  p{margin:6px 0;color:#4b5563;font-size:14px}
+  .muted{color:#9aa2ae;font-size:13px;margin-top:18px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="tick">✓</div>
+      <h1>授权完成</h1>
+      <p>已拿到授权码，正在换取登录态…</p>
+      <p class="muted">这个窗口会自动关闭，请回到 magpie 查看结果。</p>
+    </div>
+  </div>
+</body>
+</html>`
+
+/**
+ * 这个 URL 是不是登录回调？
+ *
+ * 先按调用方给的判据（`match`）认；不中再按「路径 + 带 code」兜底 ——
+ * 判据漏了只会让 code 被浏览器消费掉（之后 Node 再换会得到 `-107`），所以宁可多认一个。
+ *
+ * ⚠ 授权页自己的地址里也带 `marvis_oauth` 字样（`redirect_uri` 被百分号编码），
+ *   所以**不能用「包含 marvis_oauth」当判据**，必须看未编码的路径片段。
+ *
+ * @param {string} url
+ * @param {RegExp | null} matcher
+ * @returns {boolean}
+ */
+export function isCallbackUrl(url, matcher) {
+  const u = String(url ?? "")
+  if (!u) return false
+  if (matcher && matcher.test(u)) return true
+  if (!u.includes(CALLBACK_PATH)) return false
+  try {
+    const params = new URL(u).searchParams
+    return params.has("code") || params.has("error") || params.has("error_description")
+  } catch {
+    return false
+  }
+}
 
 /** Windows 注册表 App Paths 查浏览器；查不到返回空串。 */
 export function registryAppPath(exe) {
@@ -198,19 +284,38 @@ async function getJson(url, timeoutMs = 3000) {
 }
 
 /**
- * 打开受控浏览器，等它跳到匹配 `match` 的地址，返回那个地址。
+ * 打开受控浏览器，在**请求阶段**拦下登录回调，返回那个回调地址。
+ *
+ * 返回值里的 `body` 恒为空串（除非走了兼容兜底）：回调请求根本没发出去，
+ * 没有「回调页正文」这回事 —— 授权码只在 URL 里，换取由调用方自己做。
  *
  * @param {object} o
  * @param {{name:string,path:string}} o.browser findBrowser() 的返回值
  * @param {string} o.url 登录页
- * @param {RegExp} o.match 回调地址的判据
+ * @param {RegExp} [o.match] 回调地址的判据（不中时按「路径 + 带 code」兜底）
+ * @param {string} [o.pattern] `Fetch.enable` 的 urlPattern，默认 `*marvis_oauth*`
  * @param {Record<string,string>} [o.extraHeaders] 注入到**每个请求**的头（MarvisExt 等）
  * @param {number} [o.timeoutMs] 默认 5 分钟
+ * @param {number} [o.settleMs] 拦下后让完成页画一会儿再关窗，默认 700ms
  * @param {AbortSignal} [o.signal]
- * @returns {Promise<{url:string, body:string, browser:string}>} 回调页面的地址与正文
+ * @returns {Promise<{url:string, body:string, browser:string, intercepted:boolean}>}
+ *   `intercepted: true` = 请求在发出前被拦下（code 还没被消费，正常路径）；
+ *   `false` = 拦截没生效、浏览器自己把请求发了出去（code 多半已被消费）。
  */
-export async function openIsolatedLogin({ browser, url, match, extraHeaders, timeoutMs = 5 * 60_000, signal }) {
+export async function openIsolatedLogin({
+  browser,
+  url,
+  match,
+  pattern = DEFAULT_CALLBACK_PATTERN,
+  extraHeaders,
+  timeoutMs = 5 * 60_000,
+  settleMs = 700,
+  signal,
+}) {
   if (!browser?.path) throw new Error("没有找到可用的 Chromium 内核浏览器（Chrome / Edge / 360 / QQ 浏览器都行）")
+
+  // 去掉 g/y 标志：带 lastIndex 的正则在循环里 `.test()` 会时真时假
+  const matcher = match instanceof RegExp ? new RegExp(match.source, match.flags.replace(/[gy]/g, "")) : null
 
   const profile = mkdtempSync(join(tmpdir(), "magpie-marvis-login-"))
   const port = await freePort()
@@ -252,6 +357,8 @@ export async function openIsolatedLogin({ browser, url, match, extraHeaders, tim
   }
 
   const deadline = Date.now() + timeoutMs
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
   try {
     let pageWs = ""
     while (Date.now() < deadline) {
@@ -278,105 +385,196 @@ export async function openIsolatedLogin({ browser, url, match, extraHeaders, tim
       ws.addEventListener("error", () => reject(new Error("CDP WebSocket 连不上")), { once: true })
     })
 
-    /** 发一条 CDP 命令并等结果 */
-    const send = (id, method, params = {}) =>
+    // ── CDP 收发：一个监听器收全部「事件 + 命令回包」────────────────────
+    // ⚠ 这个监听器必须在 Page.navigate **之前**挂上：建立拦截全在事件里。
+    let nextId = 0
+    const pending = new Map()
+
+    /** 发一条 CDP 命令并等结果（带超时，避免连接断了把整条流程吊死） */
+    const send = (method, params = {}, cmdTimeout = 10_000) =>
       new Promise((resolve, reject) => {
-        const onMessage = (event) => {
-          let msg
-          try {
-            msg = JSON.parse(String(event.data))
-          } catch {
-            return
-          }
-          if (msg.id !== id) return
-          ws.removeEventListener("message", onMessage)
-          if (msg.error) reject(new Error(msg.error.message || "CDP error"))
-          else resolve(msg.result)
+        const id = ++nextId
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new Error(`CDP ${method} 超时`))
+        }, cmdTimeout)
+        timer.unref?.()
+        pending.set(id, { resolve, reject, timer })
+        try {
+          ws.send(JSON.stringify({ id, method, params }))
+        } catch (err) {
+          clearTimeout(timer)
+          pending.delete(id)
+          reject(err)
         }
-        ws.addEventListener("message", onMessage)
-        ws.send(JSON.stringify({ id, method, params }))
       })
 
+    /** @type {{url:string, via:"fetch"|"network", resourceType:string} | null} */
+    let hit = null
+    /** Fetch 域是否装上 —— 没装上就只能走 responseReceived 兼容路径 */
+    let fetchArmed = false
+    /** 兼容路径下要读正文的 requestId */
+    let fallbackRequestId = ""
+
+    /**
+     * 用静态完成页满足被暂停的请求。
+     * 注意 `body` 必须 base64 —— CDP 的 `Fetch.fulfillRequest` 只收这个形状。
+     */
+    const fulfill = (requestId) =>
+      send("Fetch.fulfillRequest", {
+        requestId,
+        responseCode: 200,
+        responsePhrase: "OK",
+        responseHeaders: [
+          { name: "Content-Type", value: "text/html; charset=utf-8" },
+          { name: "Cache-Control", value: "no-store" },
+        ],
+        body: Buffer.from(COMPLETE_PAGE, "utf8").toString("base64"),
+      })
+
+    const onMessage = (event) => {
+      let msg
+      try {
+        msg = JSON.parse(String(event.data))
+      } catch {
+        return
+      }
+
+      // 命令回包
+      if (msg.id !== undefined) {
+        const waiting = pending.get(msg.id)
+        if (!waiting) return
+        pending.delete(msg.id)
+        clearTimeout(waiting.timer)
+        if (msg.error) waiting.reject(new Error(msg.error.message || "CDP error"))
+        else waiting.resolve(msg.result)
+        return
+      }
+
+      // ① 主路径：请求**发出去之前**被拦下
+      if (msg.method === "Fetch.requestPaused") {
+        const params = msg.params ?? {}
+        const requestId = String(params.requestId ?? "")
+        const u = String(params.request?.url ?? "")
+        if (!requestId) return
+        if (!isCallbackUrl(u, matcher)) {
+          // 不是回调（授权页地址里也带 marvis_oauth 字样，但路径是编码过的）—— 放行
+          send("Fetch.continueRequest", { requestId }).catch(() => {})
+          return
+        }
+        // ⚠ 命中后**绝不** continueRequest：请求一旦发出去，服务端就把 code 消费了
+        if (hit) {
+          // 同一个回调被拦第二次（重载 / self_redirect）：同样喂静态页，但只认第一个
+          fulfill(requestId).catch(() => {})
+          return
+        }
+        fulfill(requestId)
+          .catch(() => {})
+          .finally(() => {
+            hit ??= { url: u, via: "fetch", resourceType: String(params.resourceType ?? "") }
+          })
+        return
+      }
+
+      // ② 兼容路径：Fetch 没装上时，只能看响应（此时 code 多半已被消费）
+      if (msg.method === "Network.responseReceived" && !hit) {
+        const params = msg.params ?? {}
+        // ⚠ 资源类型在 `msg.params.type`，**不在** `response.type` —— `response` 上没有这个字段
+        const kind = String(params.type ?? "")
+        const u = String(params.response?.url ?? "")
+        if (u && isCallbackUrl(u, matcher) && (kind === "Document" || kind === "Fetch" || kind === "XHR")) {
+          fallbackRequestId = String(params.requestId ?? "")
+          hit = { url: u, via: "network", resourceType: kind }
+        }
+      }
+    }
+
+    const failPending = () => {
+      for (const [id, waiting] of pending) {
+        clearTimeout(waiting.timer)
+        waiting.reject(new Error("CDP 连接已关闭"))
+        pending.delete(id)
+      }
+    }
+
+    ws.addEventListener("message", onMessage)
+    ws.addEventListener("close", failPending)
+
     try {
+      // ── 钩子：全部在 Page.navigate 之前 ─────────────────────────────
       // 补齐 client hints —— 只改 UA 不改 sec-ch-ua 会被指纹比对出来
-      await send(1, "Network.enable").catch(() => {})
-      await send(2, "Network.setUserAgentOverride", {
+      await send("Network.enable").catch(() => {})
+      await send("Network.setUserAgentOverride", {
         userAgent: CHROME_UA,
         acceptLanguage: "zh-CN,zh;q=0.9",
         platform: "Win32",
       }).catch(() => {})
-      // ⚠⚠ 关键：服务端对 `yybadaccess.3g.qq.com` 的**每个**请求都校验
+      // ⚠⚠ 服务端对 `yybadaccess.3g.qq.com` 的**每个**请求都校验
       //   `Ual-Access-MarvisExt`（uskey 设备指纹）。没有它就返回
       //   「请使用 Marvis 客户端」—— 这正是浏览器登录一直失败的原因。
       //   Marvis 的 BrowserWindow 用 `session.webRequest.onBeforeSendHeaders` 注入，
       //   这里用 CDP 的 `Network.setExtraHTTPHeaders` 达到同样效果。
       if (extraHeaders && Object.keys(extraHeaders).length > 0) {
-        await send(5, "Network.setExtraHTTPHeaders", { headers: extraHeaders }).catch(() => {})
+        await send("Network.setExtraHTTPHeaders", { headers: extraHeaders }).catch(() => {})
       }
-
       // 顺手抹掉 navigator.webdriver（比 --disable-blink-features 更干净，不带警告条）
-      await send(3, "Page.addScriptToEvaluateOnNewDocument", {
+      await send("Page.addScriptToEvaluateOnNewDocument", {
         source: "Object.defineProperty(navigator,'webdriver',{get:()=>undefined})",
       }).catch(() => {})
 
-      // 导航到授权页（钩子已装好：UA / client hints / navigator.webdriver）
-      await send(6, "Page.navigate", { url }).catch(() => {})
-
-      // ⚠⚠ 核心：`marvis_oauth` 会被**请求两次** —— QQ 的 `self_redirect` + 页面自身
-      //   的重载会让同一个 code 打两遍。第一次成功并返回 token，第二次因为 code
-      //   已被消耗而回 `-109 RC_PARAMS_INVALID`。
-      //   客户端主进程用 `[oauth-dedup]` 处理这件事（"reuse first request"）；
-      //   我们这边等价的做法是：**只认第一个响应体**，绝不去读页面最终状态。
-      //
-      //   所以：监听 `Network.responseReceived` → 命中 `marvis_oauth` →
-      //   立刻 `Network.getResponseBody` 把正文抓下来，然后马上返回。
-      let nextId = 10
-      /** @type {string | null} */
-      let firstRequestId = null
-      /** @type {string} */
-      let hitUrl = ""
-
-      ws.addEventListener("message", (event) => {
-        let msg
-        try {
-          msg = JSON.parse(String(event.data))
-        } catch {
-          return
-        }
-        if (msg.method === "Network.responseReceived" && !firstRequestId) {
-          const { requestId, response } = msg.params ?? {}
-          const u = String(response?.url ?? "")
-          // 只认 2xx/4xx 的**文档**响应；图片/脚本不算
-          const type = String(response?.type ?? "")
-          if (u && match.test(u) && (type === "Document" || type === "Fetch" || type === "XHR")) {
-            firstRequestId = requestId
-            hitUrl = u
-          }
-        }
+      // ⚠⚠ 核心：在 **Request 阶段**拦下回调。请求不会被发出去，
+      //   code 因此保持未使用 —— 由 Node 带 guid 换**唯一那一次**（见文件头）。
+      fetchArmed = await send("Fetch.enable", {
+        patterns: [{ urlPattern: pattern, requestStage: "Request" }],
       })
+        .then(() => true)
+        .catch(() => false)
+
+      // 钩子装完才导航
+      await send("Page.navigate", { url }).catch(() => {})
 
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error("登录已取消")
 
-        if (firstRequestId) {
-          // 多试几次：responseReceived 之后 body 可能还没落盘
-          for (let i = 0; i < 15; i++) {
-            try {
-              const r = await send(nextId++, "Network.getResponseBody", { requestId: firstRequestId })
-              const raw = String(r?.body ?? "")
-              const body = r?.base64Encoded ? Buffer.from(raw, "base64").toString("utf8") : raw
-              if (body.trim()) return { url: hitUrl, body, browser: browser.name }
-            } catch {
-              /* body 还没就绪 */
+        if (hit) {
+          let body = ""
+          if (hit.via === "network" && fallbackRequestId) {
+            // 兼容路径：浏览器自己发了请求，正文可能还没落盘；302 的话本来就是空的
+            for (let i = 0; i < 10 && !body; i++) {
+              try {
+                const r = await send("Network.getResponseBody", { requestId: fallbackRequestId }, 5000)
+                const raw = String(r?.body ?? "")
+                body = r?.base64Encoded ? Buffer.from(raw, "base64").toString("utf8") : raw
+              } catch {
+                /* body 还没就绪 */
+              }
+              if (!body) await sleep(200)
             }
-            await new Promise((r) => setTimeout(r, 300))
+          }
+          // 让合成的完成页有机会画出来，再把一次性窗口关掉
+          if (settleMs > 0) await sleep(settleMs)
+          return {
+            url: hit.url,
+            body,
+            browser: browser.name,
+            intercepted: hit.via === "fetch",
           }
         }
 
-        await new Promise((r) => setTimeout(r, 500))
+        await sleep(120)
       }
 
+      throw new Error(
+        `等了 ${Math.round(timeoutMs / 1000)} 秒还没完成扫码授权。` +
+          (fetchArmed
+            ? ""
+            : "（提示：这个浏览器不接受 CDP 请求拦截，换一个 Chromium 内核浏览器再试）") +
+          "可以重新点一次登录，或改用「从本机 Marvis 导入」。",
+      )
     } finally {
+      ws.removeEventListener("message", onMessage)
+      ws.removeEventListener("close", failPending)
+      failPending()
       try {
         ws.close()
       } catch {
@@ -388,4 +586,13 @@ export async function openIsolatedLogin({ browser, url, match, extraHeaders, tim
   }
 }
 
-export const _internal = { WIN_EXES, CHROME_UA, freePort, dedupe, resetBrowserCache }
+export const _internal = {
+  WIN_EXES,
+  CHROME_UA,
+  CALLBACK_PATH,
+  COMPLETE_PAGE,
+  isCallbackUrl,
+  freePort,
+  dedupe,
+  resetBrowserCache,
+}

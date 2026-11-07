@@ -61,9 +61,10 @@ test("config() 未登录也声明了模型，且 modalities 是数组、tool_cal
   const cfg = {}
   await plugin.config(cfg)
   const models = cfg.provider?.[_internal.PROVIDER]?.models
-  assert.ok(models && models.length > 0, "config.models 不能为空（铁律 1）")
+  assert.ok(models && Object.keys(models).length > 0, "config.models 不能为空（铁律 1）")
+  assert.equal(models["deepseek-v4-1-flash-261017"]?.id, "deepseek-v4-1-flash-261017", "config.models 必须以真实模型名为键")
 
-  for (const m of models) {
+  for (const m of Object.values(models)) {
     assert.equal(typeof m.id, "string")
     // config 形状：modalities.input / output 是**数组**
     assert.ok(Array.isArray(m.modalities.input), `${m.id}.modalities.input 必须是数组`)
@@ -82,9 +83,9 @@ test("config() 未登录也声明了模型，且 modalities 是数组、tool_cal
 test("provider.models：capabilities.input 五个模态键必须全是布尔", async () => {
   const plugin = await MarvisAuthPlugin({})
   const models = await plugin.provider.models(async () => null)
-  assert.ok(Array.isArray(models) && models.length > 0)
+  assert.ok(models && typeof models === "object" && Object.keys(models).length > 0)
 
-  for (const m of models) {
+  for (const m of Object.values(models)) {
     // provider.models 形状：capabilities.input 是**对象**，五个键都得写
     for (const key of ["text", "image", "audio", "video", "pdf"]) {
       assert.equal(
@@ -97,10 +98,13 @@ test("provider.models：capabilities.input 五个模态键必须全是布尔", a
     // provider.models 形状：toolcall 无下划线
     assert.equal(typeof m.capabilities.toolcall, "boolean")
     assert.equal(m.tool_call, undefined, `${m.id} 不该有 tool_call（那是 config 形状）`)
+    assert.equal(typeof m.api.id, "string", "api.id 必须是上游槽位名")
+    assert.ok(m.api.id, "api.id 不能为空，漏了会退化成数组下标 0")
     assert.equal(m.api.url, _internal.BASE_V1)
     assert.equal(m.api.npm, "@ai-sdk/openai-compatible")
     assert.equal(typeof m.id, "string")
     assert.equal(typeof m.name, "string")
+    assert.equal(m.id, m.name, "id 用真实模型名，路由才显示名字")
   }
 })
 
@@ -166,7 +170,7 @@ test("refresh 走串行锁（成对轮换的 token 不能被并发打掉）", ()
   assert.match(source, /createRefreshLock/)
   assert.match(source, /lock\.run\(/)
   // 合并语义：不能只返回新字段
-  assert.match(source, /metadata: \{ \.\.\.meta \}/)
+  assert.match(source, /metadata: \{ \.\.\.meta/)
 })
 
 test("native 目录 4 个文件必须都在（缺一个就静默返回 null）", () => {
@@ -182,16 +186,18 @@ test("config() 合并：用户改过的值优先，插件只补缺", async () =>
   const defaults = staticModels()
 
   // 用户把 main-auto 的上下文改成 2M，并删掉了 hunyuan-turbos-vision
-  const user = defaults
-    .filter((m) => m.id !== "hunyuan-turbos-vision")
-    .map((m) => (m.id === "main-auto" ? { ...m, limit: { ...m.limit, context: 2_000_000 } } : m))
+  const user = Object.fromEntries(
+    Object.entries(defaults)
+      .filter(([id]) => id !== "HY-Vision-2.0-instruct")
+      .map(([id, m]) => [id, id === "deepseek-v4-1-flash-261017" ? { ...m, limit: { ...m.limit, context: 2_000_000 } } : m]),
+  )
 
   const merged = mergeModels(defaults, user)
-  const main = merged.find((m) => m.id === "main-auto")
+  const main = merged["deepseek-v4-1-flash-261017"]
 
   assert.equal(main.limit.context, 2_000_000, "用户设的 2M 必须保留")
   assert.equal(typeof main.limit.output, "number", "用户没改的 output 不能被吃掉")
-  assert.ok(merged.some((m) => m.id === "hunyuan-turbos-vision"), "默认表里有、用户没有的模型要追加回来")
+  assert.ok(merged["HY-Vision-2.0-instruct"], "默认表里有、用户没有的模型要追加回来")
 })
 
 test("config() 已有 provider 时不重置用户配置", async () => {
@@ -221,6 +227,8 @@ test("config() 已有 provider 时不重置用户配置", async () => {
   const p = cfg.provider.marvis
   assert.equal(p.name, "我改的名字", "provider 名不能被我覆盖")
   assert.equal(p.api, "https://custom.example.com/v1", "api 不能被我覆盖")
-  assert.equal(p.models.find((m) => m.id === "main-auto").limit.context, 2_000_000, "上下文不能被我覆盖")
-  assert.equal(p.models.find((m) => m.id === "main-auto").name, "我的 V4.1 Flash")
+  assert.equal(p.models["deepseek-v4-1-flash-261017"].limit.context, 2_000_000, "上下文不能被我覆盖")
+  assert.equal(p.models["deepseek-v4-1-flash-261017"].name, "我的 V4.1 Flash")
+  assert.equal(p.models["deepseek-v4-1-flash-261017"].id, "deepseek-v4-1-flash-261017")
+  assert.equal(p.models["deepseek-v4-1-flash-261017"].apiId, "main-auto", "apiId 保留上游槽位名")
 })

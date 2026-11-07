@@ -34,8 +34,8 @@ export const ACCESS_KEY = "fpzkeTlcGLVP37qiOWd29MyaOqaJYxMi"
 export const QQ_APP_ID = "1903794758"
 export const WX_APP_ID = "wxb650708317d56f88"
 
-/** 登录类型码：QC = QQ 登录，WX = 微信登录。请求头 Ual-Access-Login-Type 用的就是这个数字 */
-export const LOGIN_TYPE = { QC: "6", WX: "5" }
+/** 登录类型码：QC = QQ 登录（1），WX = 微信登录（2）。对应 `Ual-Access-Login-Type` */
+export const LOGIN_TYPE = { QC: "1", WX: "2" }
 
 /**
  * 发出去的 UA。
@@ -97,6 +97,51 @@ const TABLE = [
 ]
 
 /**
+ * 旧版存量的模型 ID 别名。
+ *
+ * ⚠ 0.2.x 的 `staticModels()` 返回的是数组，magpie 把它持久化成了数组下标
+ * `"0"…"7"`；路由组因此写着 `marvis/0`，请求体里的 `model` 也是 `"0"`，
+ * 上游会回 `400 无效模型 id`。
+ *
+ * 新配置会改成按槽位名存，但用户已有的路由不能作废 —— 所以在 loader 里
+ * 把纯数字 ID 映射回 TABLE 顺序对应的槽位，旧路由继续可用。
+ */
+export const MODEL_ALIASES = Object.freeze(
+  Object.fromEntries(TABLE.map(([id], index) => [String(index), id])),
+)
+
+/** 槽位名 → 卡片/路由上显示的真实模型名 */
+export const DISPLAY_BY_SLOT = Object.freeze(
+  Object.fromEntries(TABLE.map(([slot, name]) => [slot, name])),
+)
+
+/** 真实模型名 → 上游接受的槽位名 */
+export const SLOT_BY_DISPLAY = Object.freeze(
+  Object.fromEntries(TABLE.map(([slot, name]) => [name, slot])),
+)
+
+/**
+ * 把模型 ID 归一成上游槽位名；未知 ID 原样返回。
+ * 支持：旧数字下标 `"0"`、真实模型名、已经是槽位名。
+ * @param {unknown} model
+ * @returns {string}
+ */
+export function canonicalModelId(model) {
+  const id = String(model ?? "")
+  return MODEL_ALIASES[id] ?? SLOT_BY_DISPLAY[id] ?? id
+}
+
+/**
+ * 把槽位名归一成真实模型名（config/provider 的 `id` 用它显示）。
+ * @param {unknown} model
+ * @returns {string}
+ */
+export function displayModelId(model) {
+  const id = String(model ?? "")
+  return DISPLAY_BY_SLOT[id] ?? id
+}
+
+/**
  * 静态模型表（`config` 钩子用）—— 没人登录时也能显示。
  *
  * ⚠ 这是 **OpenCode `#quick` 形状**，与 `provider.models` 返回的形状**不同**：
@@ -106,20 +151,26 @@ const TABLE = [
  *   两个位置写混不会报错，只会让「能不能调工具 / 能不能收图」静默为假（HOOKS 十一之三）。
  */
 export function staticModels() {
-  return TABLE.map(([id, name, context, cap]) => ({
-    id,
-    name,
-    // 收图能力：模型级 `attachment`，config 形状就是它
-    attachment: Boolean(cap.vision),
-    modalities: {
-      input: cap.vision ? ["text", "image"] : ["text"],
-      output: ["text"],
-    },
-    tool_call: Boolean(cap.tools),
-    reasoning: Boolean(cap.reasoning),
-    limit: { context, output: DEFAULT_OUTPUT },
-    ...(cap.search ? { searches: true } : {}),
-  }))
+  /** @type {Record<string, any>} */
+  const out = {}
+  for (const [slot, name, context, cap] of TABLE) {
+    out[name] = {
+      id: name,
+      apiId: slot,
+      name,
+      // 收图能力：模型级 `attachment`，config 形状就是它
+      attachment: Boolean(cap.vision),
+      modalities: {
+        input: cap.vision ? ["text", "image"] : ["text"],
+        output: ["text"],
+      },
+      tool_call: Boolean(cap.tools),
+      reasoning: Boolean(cap.reasoning),
+      limit: { context, output: DEFAULT_OUTPUT },
+      ...(cap.search ? { searches: true } : {}),
+    }
+  }
+  return out
 }
 
 /**
@@ -127,30 +178,40 @@ export function staticModels() {
  *   · 工具能力叫 `toolcall`（无下划线）
  *   · `capabilities.input` / `output` 是**对象**，五个模态键必须是布尔值
  *     （漏 `image` 等于「厂商未表态」，magpie 会去 models.dev 投票，导致收不了图的模型被当成能收图）
+ *   · `api.id` 必须是**上游模型 id**（= 槽位名）。漏了它 magpie 会把数组下标当模型 id，
+ *     路由里显示 `0`、请求发 `model:"0"`，上游回 400 无效模型 id。
  *
  * ⚠ text-only 的接口也必须写全五个键 —— 只写 `text: true` 等于没说。
+ *
+ * @returns {Record<string, any>}
  */
 export function providerModels() {
-  return TABLE.map(([id, name, context, cap]) => ({
-    id,
-    name,
-    api: { url: BASE_V1, npm: SDK },
-    capabilities: {
-      reasoning: Boolean(cap.reasoning),
-      attachment: Boolean(cap.vision),
-      toolcall: Boolean(cap.tools),
-      input: {
-        text: true,
-        image: Boolean(cap.vision),
-        audio: false,
-        video: false,
-        pdf: false,
+  /** @type {Record<string, any>} */
+  const out = {}
+  for (const [slot, name, context, cap] of TABLE) {
+    out[name] = {
+      id: name,
+      name,
+      api: { id: slot, url: BASE_V1, npm: SDK },
+      status: "active",
+      capabilities: {
+        reasoning: Boolean(cap.reasoning),
+        attachment: Boolean(cap.vision),
+        toolcall: Boolean(cap.tools),
+        input: {
+          text: true,
+          image: Boolean(cap.vision),
+          audio: false,
+          video: false,
+          pdf: false,
+        },
+        output: { text: true },
       },
-      output: { text: true },
-    },
-    limit: { context, output: DEFAULT_OUTPUT },
-    ...(cap.search ? { searches: true } : {}),
-  }))
+      limit: { context, output: DEFAULT_OUTPUT },
+      ...(cap.search ? { searches: true } : {}),
+    }
+  }
+  return out
 }
 
 /** 默认模型（magpie 路由的兜底） */
