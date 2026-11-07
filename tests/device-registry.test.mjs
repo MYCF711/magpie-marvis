@@ -1,6 +1,6 @@
 // tests/device-registry.test.mjs —— 每账号虚拟设备 guid 的形状锁
 //
-// 上游实测：token 绑定 guid；同一 token 换 guid → 401；换 qimei36/nonce → 200。
+// token 与 guid 绑定：换掉 guid 会掉登录态。
 // 所以「多账号并行」= 每个账号登录时生成独立 guid，并且不能在并发登录间串号。
 
 import test from "node:test"
