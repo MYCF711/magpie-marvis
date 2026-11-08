@@ -3,8 +3,8 @@
 // ⚠ `config.models` 必须有内容：它是**没人登录时**模型列表的唯一来源，
 //   空了就是「插件装上了但显示 0 models」。
 //
-// ⚠⚠ **模型表是对象，键是槽位名**（`cfg.models[<id>]`）。写成数组会被 magpie
-//   存成数组下标 `"0"…"7"`，路由里显示 `0`、请求发 `model:"0"`，上游 400。
+// ⚠⚠ **模型表是对象，键是真实模型显示名**（`cfg.models[<id>]`），不是内部槽位名。
+//   写成数组会被 magpie 存成数组下标 `"0"…"7"`，路由里显示 `0`、请求发 `model:"0"`，上游 400。
 //
 // ⚠⚠ **用户在 magpie 设置里改过的值优先，插件不许覆盖。**
 //   宿主把用户改过的 provider 配置原样传进来（`cfg.provider[PROVIDER]`），
@@ -18,7 +18,33 @@
 
 import { PROVIDER, PROVIDER_NAME, SDK, BASE_V1, staticModels, canonicalModelId, displayModelId } from "../context.mjs"
 
-/** 合并一个模型：用户字段优先，缺的用默认值补；id 一律用槽位名 */
+/** 给定值 → 真实显示名（槽位名 / 旧数字下标 / 真实模型名都能归一；未知原样返回） */
+function toDisplayName(value) {
+  return displayModelId(canonicalModelId(value))
+}
+
+/**
+ * 在默认表里找一个匹配的键。
+ *
+ * 依次尝试每个候选值：先按 `displayModelId` 直接归一，再经 `canonicalModelId`
+ * 把旧数字下标 / 槽位名换成显示名。全部匹配不到 → 返回 undefined（=失效条目）。
+ *
+ * @param {Record<string, any>} defaults
+ * @param {...unknown} values
+ * @returns {string | undefined}
+ */
+function matchDefaultKey(defaults, ...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue
+    const direct = displayModelId(value)
+    if (defaults[direct]) return direct
+    const aliased = toDisplayName(value)
+    if (defaults[aliased]) return aliased
+  }
+  return undefined
+}
+
+/** 合并一个模型：用户字段优先，缺的用默认值补；键 / id / name 一律用真实显示名 */
 function mergeModel(userModel, defaultModel, id) {
   const merged = { ...(defaultModel ?? {}), ...(userModel ?? {}) }
   merged.id = id
@@ -34,6 +60,11 @@ function mergeModel(userModel, defaultModel, id) {
       ...(userModel?.modalities ?? {}),
     }
   }
+
+  // name 必须是真实显示名：缺省、或是内部槽位名（main-auto）、或旧数字下标
+  // 都回落到真实显示名；用户自定义的真实名字保留。
+  const rawName = merged.name == null ? "" : String(merged.name)
+  merged.name = rawName === "" || toDisplayName(rawName) !== rawName ? id : rawName
   return merged
 }
 
@@ -52,22 +83,28 @@ export function mergeModels(defaults, user) {
 
   if (Array.isArray(user)) {
     // 旧版：数组下标就是 TABLE 顺序。按位置认回槽位名，字段仍用用户的。
+    // ⚠ 条目自带可归一的 id（数字下标 / 槽位名 / 显示名）→ 用它；否则用位置；
+    //   两者都落不到默认表 → 失效条目（如被移除的 kimi-k2.5），丢弃。
     user.forEach((um, index) => {
-      if (!um) return
-      const id = defaultIds[index] ?? displayModelId(um?.id ?? index)
-      const dm = defaults[id]
-      out[id] = mergeModel(um, dm, id)
+      if (!um || typeof um !== "object") return
+      const positional = defaultIds[index]
+      const hasOwnId = um.id !== undefined && um.id !== null && um.id !== ""
+      const id = hasOwnId
+        ? matchDefaultKey(defaults, um.id, um.apiId)
+        : positional && defaults[positional]
+          ? positional
+          : undefined
+      if (!id) return // 失效模型不得静默保留 / 改写成别的模型
+      out[id] = mergeModel(um, defaults[id], id)
       seen.add(id)
     })
   } else if (user && typeof user === "object") {
     for (const [key, um] of Object.entries(user)) {
-      if (!um || typeof um !== "object") continue
-      // 兼容 `id` 缺失或 旧数字 id 的对象键
-      // 键可能是显示名、旧槽位名（main-auto）、旧数字下标；都归一成显示名
-      const candidates = [key, um.id].filter(Boolean)
-      const id =
-        candidates.map((x) => displayModelId(x)).find((x) => defaults[x]) ??
-        displayModelId(um.id ?? key)
+      if (!um || typeof um !== "object" || Array.isArray(um)) continue
+      // 键可能是显示名、旧槽位名（main-auto）、旧数字下标；都归一成显示名。
+      // 归一不到默认表 → 失效条目，丢弃（不能静默改成 main-auto 或其他模型）。
+      const id = matchDefaultKey(defaults, key, um.id, um.apiId)
+      if (!id) continue
       out[id] = mergeModel(um, defaults[id], id)
       seen.add(id)
     }

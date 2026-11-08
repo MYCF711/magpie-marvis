@@ -12,7 +12,7 @@ OpenCode —— 不用 API key，用你的 **QQ 或微信** 登录。
 
 | | |
 |---|---|
-| **模型** | DeepSeek V4 Pro、Kimi K2.5、Claude Opus 4.6 / Sonnet 4.6、GPT-5.4、混元 2.0、GLM 5V Turbo、Hy3 预览 —— 共 18 个槽位 |
+| **模型** | DeepSeek V4.1 Flash、DeepSeek V4 Pro、DeepSeek V4 Flash、Hy3、Claude Sonnet 4.6、Claude Opus 4.6、GPT-5.4、HY-Vision 2.0 instruct —— 共 8 个模型 |
 | **额度** | 一个号每天 1000 万**计费** token（缓存免费 + 输入输出五折，实际能跑 2000 万～5000 万+） |
 | **流式** | ✅ SSE 逐 token |
 | **思考** | ✅ `reasoning_content` 可见 |

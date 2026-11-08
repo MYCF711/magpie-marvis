@@ -9,13 +9,20 @@
 // ⚠ 实测：把 UAL 签名头（md5 body+ts+accessKey+nonce）加到模型网关上是**错的** ——
 //   会从 403 风控变成 401 登录态过期。那套只用于 /v3/*。
 
-import { BASE_V1, DEFAULT_MODEL, canonicalModelId } from "../context.mjs"
+import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, canonicalModelId } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
 import { normalizeTools } from "../marvis/tool-schema.mjs"
 
-/** 上游说「模型不行」的措辞 */
+/**
+ * 上游说「模型不行」的信号 —— 只收**模型级**的，映射成 404（搁置这个模型，不打死账号）。
+ *
+ * ⚠ `4130001` = `无效模型id`（请求体里的 model 不是注册表里的槽位）。
+ * ⚠ `5104002` 是 **RPC 500**，这个业务码本身不等于模型失效 —— 不能加进来：
+ *   把 5104002 全局映射成 404 会把正常模型的上游抖动误判成「模型不可用」，
+ *   能用的模型和账号都会被标成失效。
+ */
 const MODEL_ISSUE =
-  /model.*not (found|exist|allowed|available)|no such model|不支持.*模型|模型.*(不存在|未开通|不可用)|4100402/i
+  /model.*not (found|exist|allowed|available)|no such model|不支持.*模型|模型.*(不存在|未开通|不可用)|无效模型\s*id|4130001|4100402/i
 
 /** 风控（uskey 配额用完 / 缺 MarvisExt）—— 可重试，但要换新 uskey */
 const RISK_BLOCK = /4100404|风控拦截/
@@ -35,6 +42,48 @@ function errorResponse(status, code, message, headers = {}) {
     status,
     headers: { "content-type": "application/json", ...headers },
   })
+}
+
+/**
+ * 上游真实存在的模型槽位集合。
+ *
+ * 键来自 `DISPLAY_BY_SLOT` —— 它就是 context.mjs 的 TABLE（config_defaults.yaml 的注册表），
+ * 含内部的 `main-auto` 槽位。`canonicalModelId` 会把**槽位名 / 显示名 / 旧数字下标**
+ * 三种写法都归一成槽位名，所以这里只需要判断一次集合成员关系。
+ */
+const SUPPORTED_SLOTS = new Set(Object.keys(DISPLAY_BY_SLOT))
+
+/**
+ * 归一后的模型 ID 是否属于 TABLE 的槽位集合。
+ * @param {unknown} id 已归一的模型 ID
+ * @returns {boolean}
+ */
+export function isSupportedSlot(id) {
+  return typeof id === "string" && SUPPORTED_SLOTS.has(id)
+}
+
+/** 请求体里到底有没有指定模型（空 / null 的交回上游判） */
+function hasModelId(value) {
+  return value != null && String(value) !== ""
+}
+
+/**
+ * 未知 / 已失效模型：**本地** 404，不出网、不 fallback。
+ *
+ * 为什么是 404 而不是 401/500（AGENTS 坑 6）：
+ *   · 401 会被宿主当登录问题，failover 到**每一个账号**；
+ *   · 500 会被当可重试的上游故障，同一个请求连打 8 次（kimi-k2.5 的 5104002 现场）；
+ *   · 404 只搁置这个模型，文案把用户引导回模型列表里**真实模型名**的条目。
+ */
+function modelUnavailableResponse(id) {
+  const example = DISPLAY_BY_SLOT[DEFAULT_MODEL] ?? DEFAULT_MODEL
+  return errorResponse(
+    404,
+    "model_unavailable",
+    `模型「${String(id).slice(0, 120)}」不在 Marvis 当前支持的模型表里（已失效或未知），` +
+      `这次请求没有发往上游。请在模型列表里重新选择一个真实模型名条目（例如 ${example}），` +
+      `不要手填内部槽位名或旧版数字下标。`,
+  )
 }
 
 /** 从账号凭据里取模型网关要的四件套 */
@@ -89,6 +138,8 @@ export function loaderHook() {
         // ⚠ 旧路由里模型 ID 是数组下标 `"0"…"7"`，上游只认槽位名。
         //   在这里做一次归一，旧路由不改配置也能继续用。
         let body = init?.body
+        /** @type {string | null} 归一后仍不在 TABLE 里的模型 ID */
+        let unsupportedModel = null
         if (typeof body === "string") {
           try {
             const json = JSON.parse(body)
@@ -98,12 +149,17 @@ export function loaderHook() {
               json.model = canonical
               changed = true
             }
-            // Marvis 要求每个工具 parameters 显式 type:"object"；
-            // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
-            const tools = normalizeTools(json.tools)
-            if (tools !== json.tools) {
-              json.tools = tools
-              changed = true
+            if (hasModelId(json.model) && !isSupportedSlot(json.model)) {
+              // 模型支持集合闸：已失效 / 未知模型本地就挡掉，不出网、不 fallback。
+              unsupportedModel = String(json.model)
+            } else {
+              // Marvis 要求每个工具 parameters 显式 type:"object"；
+              // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
+              const tools = normalizeTools(json.tools)
+              if (tools !== json.tools) {
+                json.tools = tools
+                changed = true
+              }
             }
             if (changed) {
               body = JSON.stringify(json)
@@ -116,6 +172,11 @@ export function loaderHook() {
           } catch {
             /* 不是 JSON 就原样转发 */
           }
+        }
+
+        // 未知 / 失效模型：本地 404，一次 fetch 都不发
+        if (unsupportedModel !== null) {
+          return modelUnavailableResponse(unsupportedModel)
         }
 
         let response
