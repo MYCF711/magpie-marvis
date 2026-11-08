@@ -9,7 +9,7 @@
 // ⚠ 实测：把 UAL 签名头（md5 body+ts+accessKey+nonce）加到模型网关上是**错的** ——
 //   会从 403 风控变成 401 登录态过期。那套只用于 /v3/*。
 
-import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, canonicalModelId } from "../context.mjs"
+import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, canonicalModelId, isUnavailableModel } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
 import { normalizeTools } from "../marvis/tool-schema.mjs"
 
@@ -44,23 +44,11 @@ function errorResponse(status, code, message, headers = {}) {
   })
 }
 
-/**
- * 上游真实存在的模型槽位集合。
- *
- * 键来自 `DISPLAY_BY_SLOT` —— 它就是 context.mjs 的 TABLE（config_defaults.yaml 的注册表），
- * 含内部的 `main-auto` 槽位。`canonicalModelId` 会把**槽位名 / 显示名 / 旧数字下标**
- * 三种写法都归一成槽位名，所以这里只需要判断一次集合成员关系。
- */
-const SUPPORTED_SLOTS = new Set(Object.keys(DISPLAY_BY_SLOT))
-
-/**
- * 归一后的模型 ID 是否属于 TABLE 的槽位集合。
- * @param {unknown} id 已归一的模型 ID
- * @returns {boolean}
- */
-export function isSupportedSlot(id) {
-  return typeof id === "string" && SUPPORTED_SLOTS.has(id)
-}
+// ⚠ 不要用 TABLE（`DISPLAY_BY_SLOT`）当准入集合。
+//   TABLE 是**对外展示目录**，不是「上游可用集合」：`app-auto` / `file-auto` /
+//   `computer-auto` / `browser-auto` 这类旧真实槽位不在 TABLE 里，上游却仍然 200。
+//   拿 TABLE 做 allowlist 会把它们本地 404 掉（0.2.21 的事故）。
+//   准入只查 `isUnavailableModel`（明确不可用名单，当前只有 `kimi-k2.5`），其余交给上游判。
 
 /** 请求体里到底有没有指定模型（空 / null 的交回上游判） */
 function hasModelId(value) {
@@ -68,7 +56,10 @@ function hasModelId(value) {
 }
 
 /**
- * 未知 / 已失效模型：**本地** 404，不出网、不 fallback。
+ * 明确不可用的模型：**本地** 404，不出网、不 fallback。
+ *
+ * 只对 `isUnavailableModel` 命中名单的模型生效（当前只有 `kimi-k2.5`）。
+ * TABLE 外的旧真实槽位不归这里管 —— 它们照常出网，可用性由上游响应决定。
  *
  * 为什么是 404 而不是 401/500（AGENTS 坑 6）：
  *   · 401 会被宿主当登录问题，failover 到**每一个账号**；
@@ -80,9 +71,8 @@ function modelUnavailableResponse(id) {
   return errorResponse(
     404,
     "model_unavailable",
-    `模型「${String(id).slice(0, 120)}」不在 Marvis 当前支持的模型表里（已失效或未知），` +
-      `这次请求没有发往上游。请在模型列表里重新选择一个真实模型名条目（例如 ${example}），` +
-      `不要手填内部槽位名或旧版数字下标。`,
+    `模型「${String(id).slice(0, 120)}」已被标记为持续不可用（上游稳定失败），` +
+      `这次请求没有发往上游。请在模型列表里重新选择一个真实模型名条目（例如 ${example}）。`,
   )
 }
 
@@ -138,8 +128,8 @@ export function loaderHook() {
         // ⚠ 旧路由里模型 ID 是数组下标 `"0"…"7"`，上游只认槽位名。
         //   在这里做一次归一，旧路由不改配置也能继续用。
         let body = init?.body
-        /** @type {string | null} 归一后仍不在 TABLE 里的模型 ID */
-        let unsupportedModel = null
+        /** @type {string | null} 命中「明确不可用」名单的模型 ID */
+        let unavailableModel = null
         if (typeof body === "string") {
           try {
             const json = JSON.parse(body)
@@ -149,17 +139,17 @@ export function loaderHook() {
               json.model = canonical
               changed = true
             }
-            if (hasModelId(json.model) && !isSupportedSlot(json.model)) {
-              // 模型支持集合闸：已失效 / 未知模型本地就挡掉，不出网、不 fallback。
-              unsupportedModel = String(json.model)
-            } else {
-              // Marvis 要求每个工具 parameters 显式 type:"object"；
-              // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
-              const tools = normalizeTools(json.tools)
-              if (tools !== json.tools) {
-                json.tools = tools
-                changed = true
-              }
+            if (hasModelId(json.model) && isUnavailableModel(json.model)) {
+              // 明确不可用名单（当前只有 kimi-k2.5）：本地挡掉，不出网、不 fallback。
+              unavailableModel = String(json.model)
+            }
+            // 其余模型（含 TABLE 外的旧真实槽位）一律出网，可用性由上游响应决定。
+            // Marvis 要求每个工具 parameters 显式 type:"object"；
+            // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
+            const tools = normalizeTools(json.tools)
+            if (tools !== json.tools) {
+              json.tools = tools
+              changed = true
             }
             if (changed) {
               body = JSON.stringify(json)
@@ -174,9 +164,9 @@ export function loaderHook() {
           }
         }
 
-        // 未知 / 失效模型：本地 404，一次 fetch 都不发
-        if (unsupportedModel !== null) {
-          return modelUnavailableResponse(unsupportedModel)
+        // 明确不可用模型：本地 404，一次 fetch 都不发
+        if (unavailableModel !== null) {
+          return modelUnavailableResponse(unavailableModel)
         }
 
         let response
