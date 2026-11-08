@@ -151,6 +151,24 @@ export function canonicalModelId(model) {
   return MODEL_ALIASES[id] ?? SLOT_BY_DISPLAY[id] ?? id
 }
 
+/** 已确认会持续失败、必须在本地拦截的模型 ID；其他旧槽位仍由上游判定。 */
+export const UNAVAILABLE_MODEL_IDS = Object.freeze(["kimi-k2.5"].map((id) => id.trim().toLowerCase()))
+
+/**
+ * 模型是否属于明确的不可用名单。
+ * 不能用 TABLE allowlist 代替：TABLE 是对外展示目录，旧版真实槽位可能仍可用。
+ *
+ * ⚠ 比对前先 **trim + 转小写**：手工配置 / 旧路由里会写成 `"kimi-k2.5 "`、
+ *   `"Kimi-K2.5"` 这类形态，不归一就会绕过 denylist，把已确认持续失败的模型
+ *   重新发到上游（config 合并和 loader 本地拦截都读这个函数）。
+ * @param {unknown} model
+ * @returns {boolean}
+ */
+export function isUnavailableModel(model) {
+  const id = String(model ?? "").trim().toLowerCase()
+  return UNAVAILABLE_MODEL_IDS.includes(canonicalModelId(id))
+}
+
 /**
  * 把槽位名归一成真实模型名（config/provider 的 `id` 用它显示）。
  * @param {unknown} model

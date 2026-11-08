@@ -1,15 +1,19 @@
-// tests/model-catalog-support.test.mjs —— 配置合并保留失效模型的回归锁
+// tests/model-catalog-support.test.mjs —— 配置合并的展示目录 / 归一化回归锁
 //
-// 背景：用户配置可能因手工配置或陈旧路由包含 `kimi-k2.5`；该槽位
-// 未出现在已发布 TABLE 中，且实测上游返回 500。旧 mergeModels 只做
-// 「用户字段优先 + 缺失追加」，从不删用户表里已不支持的条目 —— 于是
-// 失效模型会一直留在模型列表里。
+// 背景：用户配置可能因手工配置或陈旧路由包含 `kimi-k2.5`；该槽位实测上游
+// 返回 500，属于 `context.mjs` 的 `isUnavailableModel` 明确判死的**不可用名单**。
+//
+// 合并策略（0.2.22 起，**不可用 denylist + 其余保留**）：
+//   · 删 = 只有 `isUnavailableModel` 判为不可用的条目（当前只有 `kimi-k2.5`）
+//   · 留 = 其余默认表（TABLE）外条目原样保留 —— TABLE 是**对外展示目录**，
+//     不是上游可用性全集；`app-auto` 等旧真实槽位上游仍 200，不能误删
+//     （见 tests/legacy-model-config.test.mjs）
+//   · 归一 = 能落进 TABLE 的（数字下标 `0`…`7` / 槽位名 / 真实显示名）仍归一成真实显示名
 //
 // 硬要求（用户指定，不许妥协）：
 //   1. Magpie 的模型**键 / id / name** 必须是真实模型名，绝不能出现内部槽位名 `main-auto`
 //   2. `main-auto` 只允许作为上游 `apiId` / `api.id`
-//   3. 失效模型（defaults 里没有、且 displayModelId 归一不到默认表）必须被清除，
-//      不得静默改成 main-auto 或其他模型
+//   3. denylist 条目必须被清除，不得静默改成 main-auto 或其他模型
 //   4. 旧数组 / 数字下标 / 槽位名 → 真实显示名的兼容不能回归
 
 import test from "node:test"
@@ -26,9 +30,9 @@ import { mergeModels } from "../src/hooks/config.mjs"
 const defaults = staticModels()
 const defaultKeys = Object.keys(defaults).sort()
 
-// ── 1. 失效模型清除 ────────────────────────────────────────────────
+// ── 1. denylist 条目清除 ─────────────────────────────────────────
 
-test("mergeModels 清除 defaults 中不存在的失效条目 kimi-k2.5（对象形态）", () => {
+test("mergeModels 删除 denylist 中的不可用条目 kimi-k2.5（对象形态）", () => {
   const user = {
     ...defaults,
     "kimi-k2.5": {
@@ -50,15 +54,15 @@ test("mergeModels 清除 defaults 中不存在的失效条目 kimi-k2.5（对象
   assert.deepEqual(Object.keys(merged).sort(), defaultKeys, "输出键集合应等于默认表")
 })
 
-test("mergeModels 清除数组形态末尾多出来的失效条目", () => {
-  // 旧数组带多一条 kimi：位置超出默认表长度，必须丢弃
+test("mergeModels 删除数组形态末尾多出来的 denylist 条目", () => {
+  // 旧数组带多一条 kimi：denylist 命中，必须丢弃
   const user = [...Object.values(defaults), { id: "kimi-k2.5", name: "kimi-k2.5", apiId: "kimi-k2.5" }]
   const merged = mergeModels(defaults, user)
-  assert.equal(merged["kimi-k2.5"], undefined, "数组末尾的失效条目也必须被清除")
+  assert.equal(merged["kimi-k2.5"], undefined, "数组末尾的 denylist 条目也必须被清除")
   assert.deepEqual(Object.keys(merged).sort(), defaultKeys)
 })
 
-test("失效模型不会被静默改写成 main-auto 或其他真实模型", () => {
+test("denylist 条目不会被静默改写成 main-auto 或其他真实模型", () => {
   const user = { "kimi-k2.5": { id: "kimi-k2.5", name: "kimi-k2.5" } }
   const merged = mergeModels(defaults, user)
   // 不能凭空多出一个指向 main-auto 的伪造条目
@@ -66,6 +70,26 @@ test("失效模型不会被静默改写成 main-auto 或其他真实模型", () 
   // main-auto 的真实显示名那条只能是默认自带的，不能被当成 kimi 的替身多出来
   assert.equal(merged["deepseek-v4-1-flash-261017"].apiId, "main-auto")
   assert.deepEqual(Object.keys(merged).sort(), defaultKeys)
+})
+
+test("denylist 之外的手工槽位保留：TABLE 是展示目录，不是可用性全集", () => {
+  const user = {
+    "app-auto": {
+      id: "app-auto",
+      name: "app-auto",
+      apiId: "app-auto",
+      tool_call: true,
+      reasoning: true,
+      limit: { context: 1_000_000, output: 32_000 },
+    },
+  }
+  const merged = mergeModels(defaults, user)
+  assert.ok(merged["app-auto"], "不在 denylist 里的旧真实槽位不能删")
+  assert.equal(merged["app-auto"].id, "app-auto", "原条目不能被改名成默认模型")
+  assert.equal(merged["app-auto"].name, "app-auto")
+  assert.equal(merged["app-auto"].limit.context, 1_000_000)
+  // 展示目录本身不因用户配置变大
+  assert.deepEqual(Object.keys(defaults).sort(), defaultKeys)
 })
 
 // ── 2. 真实显示名 / 槽位归一保留 ──────────────────────────────────

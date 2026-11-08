@@ -1,20 +1,20 @@
-// tests/loader-model-support.test.mjs —— 模型支持集合闸（未知/失效模型不许出网）
+// tests/loader-model-support.test.mjs —— 模型不可用名单闸（只拦明确不可用的模型）
 //
-// 事故现场：手工配置或陈旧路由里写着 `marvis/kimi-k2.5`（未列入已发布 TABLE），
-// 请求照常发到 Marvis 网关，回 `5104002` RPC 500 —— 这不是 401/403/404，
-// 宿主把它当**可重试的上游故障**，同一个请求连打 8 次才放弃，用户看到的是「卡很久然后 500」。
+// 事故现场：手工配置或陈旧路由里写着 `marvis/kimi-k2.5`（上游稳定 5104002 RPC 500）——
+// 这不是 401/403/404，宿主把它当**可重试的上游故障**，同一个请求连打 8 次才放弃，
+// 用户看到的是「卡很久然后 500」。
 //
-// 闸门规则：
-//   · 归一后的模型 ID（旧下标 / 显示名 / 槽位名 三态）必须属于 TABLE 的槽位集合
-//     （判据 = `DISPLAY_BY_SLOT` 的键，即 config_defaults.yaml 里真实存在的槽位）。
-//   · 不属于 → **本地** 404 `model_unavailable`，一次 fetch 都不发，绝不静默 fallback 到默认模型。
+// 闸门规则（0.2.22 起，TABLE allowlist 已废弃）：
+//   · 只有 context.mjs 的 `isUnavailableModel` 命中的模型（当前只有 `kimi-k2.5`）才本地拦。
+//     TABLE 是**对外展示目录**，不是「上游可用集合」：`app-auto` / `file-auto` /
+//     `computer-auto` / `browser-auto` 等旧真实槽位上游仍然 200，必须继续出网。
+//   · 命中名单 → **本地** 404 `model_unavailable`，一次 fetch 都不发，绝不静默 fallback 到默认模型。
+//   · TABLE 外的其他模型（含随手编的 ID）一律出网，由上游响应决定。
 //   · `main-auto` 作为内部上游槽位继续可用（兼容旧路由），但卡片显示名仍是真实模型名。
 //   · 上游 `4130001` / `无效模型id` 归入模型级 404；`5104002` **不**做全局 404 映射
 //     （那是 RPC 故障，映射成 404 会把能用的模型/账号误标成失效）。
 //
 // 全部离线：mock 掉 globalThis.fetch，不需要真实凭据、不碰真实上游。
-//
-// 这个文件先于实现落地（红）：改之前「未知模型」会出网并透出 500、4130001 会透出 400。
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -133,13 +133,16 @@ test("kimi-k2.5（stream:false）→ 本地 404，fetch 0 次", async () => {
   }
 })
 
-test("其他未知模型（随手编的 / 空模型表里的旧名）同样本地 404", async () => {
-  for (const model of ["not-a-model", "glm-5v-turbo-thinking", "memory-compress", "kimi-k2.5"]) {
+test("TABLE 外其他模型不本地拦截：出网 1 次，由上游 4130001 归入 404", async () => {
+  // 这些只是「不在展示目录里」，不等于上游失效 —— 必须真的问上游。
+  for (const model of ["not-a-model", "glm-5v-turbo-thinking", "memory-compress"]) {
     const s = stubFetch(() => upstreamError(400, { code: 4130001, msg: "无效模型id" }))
     try {
       const req = requestFor(model, false)
       const res = await (await loaderOf()).fetch(req.url, req.init)
-      await assertLocalModelUnavailable(res, s.calls)
+      assert.equal(s.calls.length, 1, `${model} 不在明确不可用名单里，必须先出网`)
+      assert.equal(res.status, 404)
+      assert.equal((await res.json()).error.code, "model_unavailable")
     } finally {
       s.restore()
     }
