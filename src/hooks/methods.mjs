@@ -24,7 +24,7 @@
 //   由 Node 带 guid 换**唯一那一次**。`body` 恒为空 —— 没有「回调页正文」这回事。
 
 import { PROVIDER, LOGIN_TYPE } from "../context.mjs"
-import { authorizeUrl, parseCallback, deviceGuid, pastedInputOf, stateOf } from "../marvis/login.mjs"
+import { authorizeUrl, parseCallback, deviceGuid, pastedInputOf, stateOf, extractCode } from "../marvis/login.mjs"
 import { createDeviceRegistry, newDeviceGuid, stateOfUrl } from "../marvis/device.mjs"
 import { openIsolatedLogin, findBrowser } from "../marvis/browser.mjs"
 import { resolveAccount } from "../account-name.mjs"
@@ -215,15 +215,31 @@ function manualPasteLogin(loginType, label, instructions) {
               "没有收到回调地址：登录完请把浏览器地址栏里那条 `…marvis_oauth?code=…&state=…` 整条粘贴回来。",
             )
           }
+          // ⚠ 先确认里面真有 code，再动 registry：空输入/贴错东西时不许把这次登录作废，
+          //   否则用户连一次重试的机会都没有（维护者 #9 评审第 1 点）
+          if (!extractCode(pasted)) {
+            throw new Error(
+              "粘贴的内容里没有 code：请把地址栏里那条 `…marvis_oauth?login_type=…&code=…&state=…` 整条复制。",
+            )
+          }
           const state = stateOf(pasted)
+          if (!state) {
+            throw new Error("粘贴的内容里没有 state：请重新复制地址栏里那条回调地址。")
+          }
           // 微信的 state 本身就是 guid，QQ 的只能靠 authorize() 那次暂存
           const guid =
             pendingManual.take(state) || (loginType === "WX" && /^[0-9a-f]{32}$/i.test(state) ? state : "")
           if (!guid) {
             throw new Error("登录流程已失效（找不到这次登录的设备标识）。请重新点一次登录。")
           }
-          const acct = await withProfile(await parseCallback(pasted, "", { loginType, guid }), loginType)
-          return authOf({ ...acct, guid, loginType: acct.loginType ?? LOGIN_TYPE[loginType] ?? "1" })
+          try {
+            const acct = await withProfile(await parseCallback(pasted, "", { loginType, guid }), loginType)
+            return authOf({ ...acct, guid, loginType: acct.loginType ?? LOGIN_TYPE[loginType] ?? "1" })
+          } catch (err) {
+            // 换取失败（网络/上游抖动/上游临时错误）：把 state→guid 放回去，允许同一条回调地址重试
+            pendingManual.remember(state, guid)
+            throw err
+          }
         },
       }
     },

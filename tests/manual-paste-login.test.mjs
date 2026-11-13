@@ -9,7 +9,7 @@
 //   ① 手动入口必须是 method: "code" 且不自己开页面（不能设 opened: true，否则 magpie 不再弹页）
 //   ② guid 必须与授权那次同一个：QQ 的 state 是随机小数，微信的 state 就是 guid
 //   ③ callback 的参数形态两种都认：callback(粘贴内容) 与 callback(url, 粘贴内容)
-//   ④ 同一个 state 只能换一次（registry 一次性）
+//   ④ state→guid 只在**换取成功后**消费：空输入/换取失败都能原样重试（#9 评审第 1 点）
 //
 // 全部离线：fetch 换成假实现。跑法：node --test tests/manual-paste-login.test.mjs
 
@@ -147,7 +147,61 @@ test("两参形态 callback(url, input) 也认（宿主签名可能变）", asyn
 test("粘贴内容里什么都没有时报可读错误，不是 -109", async () => {
   const m = manual("QQ")
   const r = await m.authorize()
-  await assert.rejects(() => r.callback("随便写点东西"), /回调地址|登录流程已失效/)
+  await assert.rejects(() => r.callback("随便写点东西"), /没有 code/)
+})
+
+test("两参形态下空输入不消耗这次登录，原样重试仍成功", async () => {
+  const s = stubFetch()
+  try {
+    const m = manual("QQ")
+    const r = await m.authorize()
+    const state = new URL(r.url).searchParams.get("state")
+    // 空输入时 helper 回退到授权 URL（它没有 code）→ 报可读错误，registry 不许被动
+    await assert.rejects(() => r.callback(r.url, ""), /没有 code/)
+    const pasted = `https://yybadaccess.3g.qq.com${OAUTH_PATH}?login_type=QC&code=${CODE}&state=${state}`
+    const auth = await r.callback(pasted)
+    assert.equal(auth.type, "success")
+  } finally {
+    s.restore()
+  }
+})
+
+test("换取失败（上游抖动）会把映射放回去，重试成功", async () => {
+  const real = globalThis.fetch
+  let attempt = 0
+  globalThis.fetch = async (url) => {
+    const u = String(url)
+    if (u.includes(OAUTH_PATH)) {
+      attempt += 1
+      if (attempt === 1) {
+        // 上游第一次回一个没有 Set-Cookie 的 302 → exchangeCode 抛错
+        return new Response(null, {
+          status: 302,
+          headers: { location: "https://yybadaccess.3g.qq.com/marvis_client_login/oauth_done" },
+        })
+      }
+      return ok302()
+    }
+    if (u.includes("marvis_get_user_info")) {
+      return new Response(JSON.stringify({ ret: 0, nick_name: "阿明", head_img_url: "" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })
+    }
+    return new Response("not found", { status: 404 })
+  }
+  try {
+    const m = manual("QQ")
+    const r = await m.authorize()
+    const state = new URL(r.url).searchParams.get("state")
+    const pasted = `https://yybadaccess.3g.qq.com${OAUTH_PATH}?login_type=QC&code=${CODE}&state=${state}`
+    await assert.rejects(() => r.callback(pasted))
+    const auth = await r.callback(pasted)
+    assert.equal(auth.type, "success")
+    assert.equal(auth.access, "TOKEN_abc123")
+  } finally {
+    globalThis.fetch = real
+  }
 })
 
 test("同一个 state 只能换一次", async () => {

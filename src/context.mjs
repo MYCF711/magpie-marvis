@@ -7,7 +7,7 @@
 //
 // ⚠ 模型表来自 Marvis 自己的 `_internal/CONFIG`（Fernet 加密的 config_defaults.yaml）。
 //   `model` 字段填的是**槽位名**，服务端再路由到真实模型
-//   （例：`deepseek-v4-pro-external` → 实际 `deepseek-v4-pro-202606`）。
+//   （例：`main-auto` → 实际 `deepseek-v4-1-flash-261017`）。
 //   响应体的 `model` 字段会回真实模型名，看那个才是准的。
 
 /** 厂商 id：agent 用 `<id>/<model>` 命名 */
@@ -105,7 +105,11 @@ const TABLE = [
 
   // ── DeepSeek ────────────────────────────────────────────────
   ["main-auto", "deepseek-v4-1-flash-261017", 1_000_000, { reasoning: true, tools: true }],
-  ["deepseek-v4-pro-external", "deepseek-v4-pro-202606", 1_000_000, { reasoning: true, tools: true }],
+  // ⚠ 2026-11-13 实测：`deepseek-v4-pro-external` 回的是 `deepseek-v4-1-flash-261017`，
+  //   不是名字暗示的 pro —— 显示名跟着实际值走，并加后缀与上面的 main-auto 区分。
+  //   留这条的理由：auto 家族（main-auto / file-auto / computer-auto / browser-auto）
+  //   在服务端是**按账号**改路由的，这条固定映射不受影响 —— 账号被改路由时它是可用的替代槽位。
+  ["deepseek-v4-pro-external", "deepseek-v4-1-flash-261017 (防降级)", 1_000_000, { reasoning: true, tools: true }],
   ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 1_000_000, { reasoning: true, tools: true }],
 
   // ── 其他厂商 ─────────────────────────────────────────────────
@@ -135,6 +139,20 @@ export const DISPLAY_BY_SLOT = Object.freeze(
   Object.fromEntries(TABLE.map(([slot, name]) => [slot, name])),
 )
 
+/**
+ * 已下线的**旧显示名** → 当前槽位。
+ *
+ * ⚠ 与 `MODEL_ALIASES`（数字下标）分开：那个锁的是 TABLE 位置契约，这个只管改过名的条目。
+ *
+ * `deepseek-v4-pro-external` 在 0.2.22 及以前的展示名是 `deepseek-v4-pro-202606`；
+ * 2026-11-13 实测该槽位实际回 `deepseek-v4-1-flash-261017`，显示名随之改。
+ * 用户的路由组里可能还写着旧名字（`marvis/deepseek-v4-pro-202606`）——
+ * 不归一就会被原样发给上游，回 `400 无效模型id`，等于升级即打断在用的路由。
+ */
+const LEGACY_DISPLAY_ALIASES = Object.freeze({
+  "deepseek-v4-pro-202606": "deepseek-v4-pro-external",
+})
+
 /** 真实模型名 → 上游接受的槽位名 */
 export const SLOT_BY_DISPLAY = Object.freeze(
   Object.fromEntries(TABLE.map(([slot, name]) => [name, slot])),
@@ -142,13 +160,13 @@ export const SLOT_BY_DISPLAY = Object.freeze(
 
 /**
  * 把模型 ID 归一成上游槽位名；未知 ID 原样返回。
- * 支持：旧数字下标 `"0"`、真实模型名、已经是槽位名。
+ * 支持：旧数字下标 `"0"`、已下线的旧显示名、真实模型名、已经是槽位名。
  * @param {unknown} model
  * @returns {string}
  */
 export function canonicalModelId(model) {
   const id = String(model ?? "")
-  return MODEL_ALIASES[id] ?? SLOT_BY_DISPLAY[id] ?? id
+  return MODEL_ALIASES[id] ?? LEGACY_DISPLAY_ALIASES[id] ?? SLOT_BY_DISPLAY[id] ?? id
 }
 
 /** 已确认会持续失败、必须在本地拦截的模型 ID；其他旧槽位仍由上游判定。 */
