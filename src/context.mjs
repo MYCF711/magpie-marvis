@@ -104,7 +104,7 @@ const TABLE = [
   //   kimi-k2.5（500 RPC）· hunyuan-2.0-instruct-20251111（空响应）· venus-vision-llm（→ default）
 
   // ── DeepSeek ────────────────────────────────────────────────
-  ["main-auto", "deepseek-v4-1-flash-261017", 1_000_000, { reasoning: true, tools: true }],
+  ["main-auto", "deepseek-v4-1-flash-261017", 1_000_000, { reasoning: true, tools: true, vision: true }],
   ["deepseek-v4-pro-external", "deepseek-v4-pro-202606", 1_000_000, { reasoning: true, tools: true }],
   ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 1_000_000, { reasoning: true, tools: true }],
 
