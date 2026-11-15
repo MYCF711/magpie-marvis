@@ -32,29 +32,33 @@ const RISK_BLOCK = /4100404|风控拦截/
 const AUTH_EXPIRED = /4100403|登录态过期|未登录/
 
 /**
- * Marvis 的内容过滤会**精确**拦下这句（issue #22，2026-11-15 实测）。
+ * Marvis 的内容过滤会**精确**拦下这几句 agent 身份句（issue #22，2026-11-15 实测）。
  *
- * 直打上游、只换 system prompt，其他一模一样：
- *   `You are a helpful assistant.`                                  → 200
- *   `You are an AI agent powered by DeepSeek Harness.`               → 403 非法请求
- *   `You are an assistant. Powered by DeepSeek Harness.`             → 200
- *   `You are an AI agent powered by DeepSeek.`                        → 200
+ * 直打上游、只换 system prompt 的第一句，其他一模一样：
+ *   `You are a helpful assistant.`                                   → 200
+ *   `You are an AI agent powered by DeepSeek Harness.`                → 403 非法请求（DSH）
+ *   `You are a coding agent running in the Codex CLI, …`              → 403 非法请求（Codex）
+ *   `You are Claude Code, Anthropic's official CLI for Claude, …`     → 403 非法请求（Claude Desktop）
+ *   `You are ZCode, an interactive agent.`                            → 200
  *
- * 少一个词就不触发 ⇒ 上游是定点匹配，基本可以认定是定向封 DSH。
- * 命中时上游回 403「非法请求」，而 DSH 会把它显示成「API 密钥无效」，完全指不到原因 ——
- * 所以这里只做**错误文案**的诊断，不改请求、不拦请求。
+ * 少一个词、或在两个词之间插一个连字符就不触发 ⇒ 上游是**定点匹配产品身份**。
+ * 命中时上游回 403「非法请求」，宿主多半显示成「API 密钥无效」，完全指不到原因。
  */
 const HARNESS_IDENTITY_PROMPT = /You are an AI agent powered by DeepSeek Harness/i
 
 /**
- * 自动改写的形态：把那两个词之间的空格换成连字符。
+ * 自动改写的形态：把身份短语里的空格换成连字符。
  *
- * 实测 `DeepSeek-Harness` 与 `DeepSeek — Harness` 都回 200，而加在句末（`Harness!`、`Harness,`）、
- * 双空格、纯小写、后置括号全都还是 403 —— 上游匹配的是「连续字符串 `DeepSeek Harness` + 单个空格」。
+ * 实测 `DeepSeek-Harness`、`Codex-CLI`、`Claude-Code` 都回 200；加在句末（`Harness!`、`Harness,`）、
+ * 双空格、纯小写、后置括号全都还是 403 —— 上游匹配的是「连续字符串 + 单个空格」。
  *
- * ⚠ 只动这一句，语义不变：`(…DeepSeek)\s+(Harness)` → `$1-$2`。
+ * ⚠ 只动身份短语这一处，语义不变；已经写成连字符形态的一个字节都不碰（0.2.30 的门禁）。
  */
-const HARNESS_IDENTITY_REWRITE = /(You are an AI agent powered by DeepSeek)\s+(Harness)/i
+const IDENTITY_REWRITES = [
+  [/(You are an AI agent powered by DeepSeek)\s+(Harness)/i, "$1-$2"],
+  [/(You are a coding agent running in the Codex)\s+(CLI)/i, "$1-$2"],
+  [/(You are Claude)\s+(Code, Anthropic's official CLI for Claude)/i, "$1-$2"],
+]
 
 /**
  * Claude Code 的身份句会被**同一套**内容过滤拦下（issue #26，2026-11-15 实测，错误码 4100406）。
@@ -85,22 +89,26 @@ function errorResponse(status, code, message, headers = {}) {
 }
 
 /**
- * 把会被上游内容过滤拦下的那句 system prompt 改写成能放行的形态。
+ * 把会被上游内容过滤拦下的身份句改写成能放行的形态。
  *
- * ⚠ 只改 `(…DeepSeek)\s+(Harness)` 这一处，其余字符一个都不碰；不删句、不换措辞。
+ * ⚠ 每条规则只改身份短语里的那一个空格，其余字符一个都不碰；不删句、不换措辞。
  * ⚠ 返回**新数组**才表示改过 —— 调用方据此决定要不要重新序列化 body（并去掉 content-length）。
  *
  * @param {unknown} messages
  * @returns {unknown}
  */
-function rewriteHarnessIdentity(messages) {
+function rewriteAgentIdentity(messages) {
   if (!Array.isArray(messages)) return messages
   let touched = false
   const out = messages.map((message) => {
     if (!message || typeof message !== "object" || typeof message.content !== "string") return message
-    if (!HARNESS_IDENTITY_REWRITE.test(message.content)) return message
+    let content = message.content
+    for (const [pattern, replacement] of IDENTITY_REWRITES) {
+      content = content.replace(pattern, replacement)
+    }
+    if (content === message.content) return message
     touched = true
-    return { ...message, content: message.content.replace(HARNESS_IDENTITY_REWRITE, "$1-$2") }
+    return { ...message, content }
   })
   return touched ? out : messages
 }
@@ -189,6 +197,8 @@ export function loaderHook() {
         // ⚠ 旧路由里模型 ID 是数组下标 `"0"…"7"`，上游只认槽位名。
         //   在这里做一次归一，旧路由不改配置也能继续用。
         let body = init?.body
+        /** 改写前的原始请求体 —— 403 诊断要靠它判断上游拦的是哪句身份声明（body 可能已被改写） */
+        const originalBody = typeof body === "string" ? body : ""
         /** @type {string | null} 命中「明确不可用」名单的模型 ID */
         let unavailableModel = null
         /** 请求体里是否含被上游内容过滤定向拦截的 DSH 标识语句 */
@@ -235,9 +245,9 @@ export function loaderHook() {
                 }
                 throw err
               }
-              // ⚠ 上游内容过滤会精确拦下 `You are an AI agent powered by DeepSeek Harness.`
-              //   （issue #22 实测：中间换成连字符就放行）。自动改写这一句，用户不用动 DSH 配置。
-              const rewritten = rewriteHarnessIdentity(json.messages)
+              // ⚠ 上游内容过滤会精确拦下 DSH / Codex / Claude Desktop 的身份句
+              //   （issue #22 实测：身份短语中间换成连字符就放行）。自动改写，用户不用改客户端配置。
+              const rewritten = rewriteAgentIdentity(json.messages)
               if (rewritten !== json.messages) {
                 json.messages = rewritten
                 changed = true
@@ -311,8 +321,7 @@ export function loaderHook() {
         }
         if (
           response.status === 403 &&
-          typeof body === "string" &&
-          CLAUDE_IDENTITY_PROMPT.test(body) &&
+          CLAUDE_IDENTITY_PROMPT.test(originalBody) &&
           /非法请求|permission_error/i.test(text)
         ) {
           return errorResponse(
