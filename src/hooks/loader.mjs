@@ -32,47 +32,31 @@ const RISK_BLOCK = /4100404|风控拦截/
 const AUTH_EXPIRED = /4100403|登录态过期|未登录/
 
 /**
- * Marvis 的内容过滤会**精确**拦下这几句 agent 身份句（issue #22，2026-11-15 实测）。
+ * Marvis 的内容过滤拦的是「**system 首行 + 词对 + 单个空格**」（issue #22 / #26）。
  *
- * 直打上游、只换 system prompt 的第一句，其他一模一样：
- *   `You are a helpful assistant.`                                   → 200
- *   `You are an AI agent powered by DeepSeek Harness.`                → 403 非法请求（DSH）
- *   `You are a coding agent running in the Codex CLI, …`              → 403 非法请求（Codex）
- *   `You are Claude Code, Anthropic's official CLI for Claude, …`     → 403 非法请求（Claude Desktop）
- *   `You are ZCode, an interactive agent.`                            → 200
+ * 2026-11-15 首次定位 + 2026-11-16 复测（直打上游，只换 system prompt 第一句）：
  *
- * 少一个词、或在两个词之间插一个连字符就不触发 ⇒ 上游是**定点匹配产品身份**。
- * 命中时上游回 403「非法请求」，宿主多半显示成「API 密钥无效」，完全指不到原因。
+ *   `You are an AI agent powered by DeepSeek Harness.`      → 403 非法请求
+ *   中文写法（由 DeepSeek Harness 驱动…）                    → 403 非法请求
+ *   全小写同一句                                             → 403（大小写不敏感）
+ *   句末加 ! 或 ,                                            → 403（句末符号无效）
+ *   同一句放第 2 行 / 行内带前缀 / user 或 assistant 角色     → 200
+ *   `DeepSeek-Harness` / `DeepSeek — Harness`               → 200（词间插字符放行）
+ *
+ * ⇒ 判据是「首行里的词对」，不是「整句模板」。只认英文整句会漏掉中文与本地化写法 ——
+ *   它们照样 403，而且因为不命中模板，连 content_filtered 诊断都不会触发，
+ *   用户看到的仍是宿主那句「API 密钥无效」。
  */
-const HARNESS_IDENTITY_PROMPT = /You are an AI agent powered by DeepSeek Harness/i
-
-/**
- * 自动改写的形态：把身份短语里的空格换成连字符。
- *
- * 实测 `DeepSeek-Harness`、`Codex-CLI`、`Claude-Code` 都回 200；加在句末（`Harness!`、`Harness,`）、
- * 双空格、纯小写、后置括号全都还是 403 —— 上游匹配的是「连续字符串 + 单个空格」。
- *
- * ⚠ 只动身份短语这一处，语义不变；已经写成连字符形态的一个字节都不碰（0.2.30 的门禁）。
- */
-const IDENTITY_REWRITES = [
+const IDENTITY_PHRASES = [
   [/(You are an AI agent powered by DeepSeek)\s+(Harness)/i, "$1-$2"],
   [/(You are a coding agent running in the Codex)\s+(CLI)/i, "$1-$2"],
   [/(You are Claude)\s+(Code, Anthropic's official CLI for Claude)/i, "$1-$2"],
+  [/(你是一个由\s*DeepSeek)\s+(Harness)/i, "$1-$2"],
 ]
 
-/**
- * Claude Code 的身份句会被**同一套**内容过滤拦下（issue #26，2026-11-15 实测，错误码 4100406）。
- *
- * 直打上游、只换 system prompt：
- *   `You are Claude Code, Anthropic's official CLI for Claude.`      → 403 4100406
- *   `You are Claude-Code, Anthropic's official CLI for Claude.`      → 200
- *   `You are Claude — Code, …`                                        → 200
- *   `You are a Claude agent, built on Anthropic's Claude Agent SDK.`  → 200（这句不触发）
- *
- * ⚠ 这里**只做错误文案诊断**，不替第三方工具改写 prompt —— 改不改、怎么改，
- *   是调用方（Claude Code / Codex 之类）自己的决定，插件越权改会有副作用。
- */
-const CLAUDE_IDENTITY_PROMPT = /You are Claude Code,\s*Anthropic's official CLI for Claude/i
+/** 判定用（只看原文，不参与改写）：命中任一条即认为这次 403 是内容过滤 */
+const IDENTITY_PHRASE_TEST =
+  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent running in the Codex\s+CLI|You are Claude\s+Code|你是一个由\s*DeepSeek\s+Harness/i
 
 /**
  * 上游内容过滤拦截时的**统一**提示。
@@ -101,26 +85,67 @@ function errorResponse(status, code, message, headers = {}) {
 /**
  * 把会被上游内容过滤拦下的身份句改写成能放行的形态。
  *
- * ⚠ 每条规则只改身份短语里的那一个空格，其余字符一个都不碰；不删句、不换措辞。
+ * ⚠ 只改 system 消息**第一行**里的身份短语 —— 那是上游唯一会拦的位置；
+ *   user / assistant 里的同一句上游本来就放行，改了反而是多余改动。
+ * ⚠ 门禁不变：只把词间那一个空格换成连字符，其余字符一个都不碰；
+ *   已经写成连字符 / 破折号的形态没有空格可换，仍然原样发出（0.2.30 的用例继续守着）。
  * ⚠ 返回**新数组**才表示改过 —— 调用方据此决定要不要重新序列化 body（并去掉 content-length）。
  *
  * @param {unknown} messages
  * @returns {unknown}
  */
+function firstLineOf(text) {
+  const cut = text.indexOf("\n")
+  return cut < 0 ? text : text.slice(0, cut)
+}
+
+/** 首行里的身份短语换成连字符形态；没有可换的就原样返回 */
+function rewriteFirstLine(text) {
+  const line = firstLineOf(text)
+  let next = line
+  for (const [pattern, replacement] of IDENTITY_PHRASES) {
+    next = next.replace(pattern, replacement)
+  }
+  return next === line ? text : next + text.slice(line.length)
+}
+
 function rewriteAgentIdentity(messages) {
   if (!Array.isArray(messages)) return messages
   let touched = false
   const out = messages.map((message) => {
-    if (!message || typeof message !== "object" || typeof message.content !== "string") return message
-    let content = message.content
-    for (const [pattern, replacement] of IDENTITY_REWRITES) {
-      content = content.replace(pattern, replacement)
-    }
+    if (!message || typeof message !== "object") return message
+    if (message.role !== "system") return message
+    if (typeof message.content !== "string") return message
+    const content = rewriteFirstLine(message.content)
     if (content === message.content) return message
     touched = true
     return { ...message, content }
   })
   return touched ? out : messages
+}
+
+/**
+ * 这次请求体里有没有「上游会拦的身份短语」—— **改写前**判定，只影响 403 的文案。
+ * 只看 system 首行，与上游判据保持同一集合，避免把普通 403 误判成内容过滤。
+ *
+ * @param {unknown} bodyString
+ * @returns {boolean}
+ */
+function identityBlockedInSystem(bodyString) {
+  if (typeof bodyString !== "string") return false
+  let json = null
+  try {
+    json = JSON.parse(bodyString)
+  } catch {
+    return false
+  }
+  const messages = Array.isArray(json?.messages) ? json.messages : []
+  for (const message of messages) {
+    if (!message || message.role !== "system") continue
+    const text = typeof message.content === "string" ? message.content : ""
+    if (IDENTITY_PHRASE_TEST.test(firstLineOf(text))) return true
+  }
+  return false
 }
 
 // ⚠ 不要用 TABLE（`DISPLAY_BY_SLOT`）当准入集合。
@@ -215,7 +240,7 @@ export function loaderHook() {
         let harnessIdentityPrompt = false
         if (typeof body === "string") {
           // 只做标记，不改 body —— 命中与否只影响错误文案
-          harnessIdentityPrompt = HARNESS_IDENTITY_PROMPT.test(body)
+          harnessIdentityPrompt = identityBlockedInSystem(originalBody)
           let json = null
           try {
             json = JSON.parse(body)
@@ -321,9 +346,7 @@ export function loaderHook() {
         }
         // ⚠ 不点名具体 agent / 身份句：被拦的可能有很多家，写死一家会在别家命中时误导。
         //   只传达确定的事 —— 性质（内容过滤，非密钥/登录）+ 修复方法去哪拿。
-        const contentFilterSuspect =
-          harnessIdentityPrompt || CLAUDE_IDENTITY_PROMPT.test(originalBody)
-        if (response.status === 403 && contentFilterSuspect && /非法请求|permission_error/i.test(text)) {
+        if (response.status === 403 && harnessIdentityPrompt && /非法请求|permission_error/i.test(text)) {
           return errorResponse(403, "content_filtered", CONTENT_FILTER_HINT)
         }
         // 其余原样透出

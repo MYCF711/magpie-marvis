@@ -481,3 +481,103 @@ test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", 
     }
   }
 })
+// ─────────────────────────────────────────────────────────────
+// 中文 / 本地化身份句（2026-11-16 复测）
+//
+// 判据是「**system 首行 + 词对 + 单个空格**」，不是「三句英文模板」：
+//   system 第 1 行 `你是一个由 DeepSeek Harness 驱动的 AI 智能体。`   → 403 非法请求
+//   system 第 1 行 全小写 / 句末加 !                               → 403
+//   system 第 2 行 / user 角色里的同一句                            → 200
+// ⇒ 旧版只认英文整句，中文写法既不改写也不诊断，用户看到的是原始 403
+//   （宿主再翻成「API 密钥无效」）—— 这就是本条用例要锁住的回归。
+// ─────────────────────────────────────────────────────────────
+
+test("中文身份句写在 system 首行 → 自动改写，且 403 改判成 content_filtered", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.messages[0].content, "你是一个由 DeepSeek-Harness 驱动的 AI 智能体。", "中文写法同样要把词间空格换成连字符")
+    assert.equal(res.status, 403)
+    assert.equal((await res.json()).error.code, "content_filtered", "中文写法不许退化成原始 403")
+  } finally {
+    s.restore()
+  }
+})
+
+test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节都不改", async () => {
+  const cases = [
+    [{ role: "system", content: "你是一个助手。\n你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }, { role: "user", content: "ping" }],
+    [{ role: "user", content: "你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }],
+    [{ role: "system", content: "You are a helpful assistant." }, { role: "assistant", content: "You are an AI agent powered by DeepSeek Harness." }, { role: "user", content: "ping" }],
+  ]
+  for (const messages of cases) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = messages
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.deepEqual(sent.messages, messages, "上游本来就放行的位置，不许改（改了是多余改动）")
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("全小写 / 句末加感叹号的身份句照样会被拦，也照样要改写", async () => {
+  const variants = [
+    ["you are an ai agent powered by deepseek harness.", "you are an ai agent powered by deepseek-harness."],
+    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent powered by DeepSeek-Harness!"],
+  ]
+  for (const [input, expected] of variants) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: input }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, expected)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("Codex 身份句被拦时也要给 content_filtered 诊断（旧版只有 DSH 与 Claude 两条分支）", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "You are a coding agent running in the Codex CLI, a terminal-based coding assistant." }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    assert.equal((await res.json()).error.code, "content_filtered")
+  } finally {
+    s.restore()
+  }
+})
+
+test("system 首行没有身份短语时，403 仍然原样透出（不许把普通 403 误判成内容过滤）", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    assert.notEqual((await res.json()).error?.code, "content_filtered")
+  } finally {
+    s.restore()
+  }
+})
