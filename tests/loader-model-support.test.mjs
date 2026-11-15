@@ -289,14 +289,19 @@ test("system prompt 命中 DSH 标识句 + 上游 403 → 改判成可读的 con
   }
 })
 
-test("普通 system prompt 遇到同样的 403 → 原样透出（不许误判）", async () => {
+test("任何 403「非法请求」都给 content_filtered —— 不再按指纹判定", async () => {
+  // 指纹在持续扩大（英文 → 中文 → 还没见过的写法），按指纹判定永远漏。
+  // 403 + 非法请求这个组合目前只出现在内容过滤上（模型无权限是 400 无效模型id），
+  // 所以宁可多给一句「进群」，也不把人甩回宿主那句「API 密钥无效」。
   const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 403)
     const out = await res.json()
-    assert.notEqual(out.error?.code, "content_filtered", "没命中标识句时不许改判")
+    assert.equal(out.error?.code, "content_filtered", "普通 system prompt + 403 非法请求也要指路")
+    assert.match(out.error.message, /QQ 群 451129479/)
+    assert.match(out.error.message, /非密钥或登录问题/)
   } finally {
     s.restore()
   }
@@ -567,17 +572,3 @@ test("Codex 身份句被拦时也要给 content_filtered 诊断（旧版只有 D
   }
 })
 
-test("system 首行没有身份短语时，403 仍然原样透出（不许把普通 403 误判成内容过滤）", async () => {
-  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
-  try {
-    const req = requestFor("deepseek-v4-1-flash-261017")
-    const body = JSON.parse(req.init.body)
-    body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...body.messages]
-    req.init.body = JSON.stringify(body)
-    const res = await (await loaderOf()).fetch(req.url, req.init)
-    assert.equal(res.status, 403)
-    assert.notEqual((await res.json()).error?.code, "content_filtered")
-  } finally {
-    s.restore()
-  }
-})
