@@ -344,9 +344,11 @@ export function loaderHook() {
           // 模型级错误 → 404，只搁置这个模型，不打死账号（AGENTS 坑 6）
           return errorResponse(404, "model_unavailable", `该模型在当前账号不可用：${text.slice(0, 300)}`)
         }
-        // ⚠ 不点名具体 agent / 身份句：被拦的可能有很多家，写死一家会在别家命中时误导。
-        //   只传达确定的事 —— 性质（内容过滤，非密钥/登录）+ 修复方法去哪拿。
-        if (response.status === 403 && harnessIdentityPrompt && /非法请求|permission_error/i.test(text)) {
+        // ⚠ 403 +「非法请求」一律按内容过滤处理，**不再看是否命中已知指纹**。
+        //   理由：上游的指纹在持续扩大（英文 → 中文 → 还没见过的写法），按指纹判定永远漏；
+        //   而 403 + 这个组合目前只出现在内容过滤上（模型无权限是 400「无效模型id」）。
+        //   宁可多给一句「进群」，也不要把人甩回宿主那句「API 密钥无效」。
+        if (response.status === 403 && /非法请求|permission_error/i.test(text)) {
           return errorResponse(403, "content_filtered", CONTENT_FILTER_HINT)
         }
         // 其余原样透出
