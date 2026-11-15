@@ -8,7 +8,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 
-import { MODEL_ALIASES, canonicalModelId, displayModelId } from "../src/context.mjs"
+import { MODEL_ALIASES, canonicalModelId, displayModelId, DISPLAY_BY_SLOT } from "../src/context.mjs"
 
 test("数字 ID 按 TABLE 顺序映射到槽位名", () => {
   assert.equal(canonicalModelId("0"), "main-auto")
@@ -38,11 +38,22 @@ test("旧显示名 deepseek-v4-pro-202606 仍能归一（改名不打断已有�
 test("两条 4.1f 条目并存，但归一到不同槽位", () => {
   // main-auto：显示名 = 实际模型名；防降级条目：同模型、另一条服务端路由（带后缀区分）
   assert.equal(canonicalModelId("deepseek-v4-1-flash-261017"), "main-auto")
-  assert.equal(canonicalModelId("deepseek-v4-1-flash-261017 (防降级)"), "deepseek-v4-pro-external")
+  assert.equal(canonicalModelId("deepseek-v4-1-flash-261017-antidowngrade"), "deepseek-v4-pro-external")
   assert.notEqual(
     canonicalModelId("deepseek-v4-1-flash-261017"),
-    canonicalModelId("deepseek-v4-1-flash-261017 (防降级)"),
+    canonicalModelId("deepseek-v4-1-flash-261017-antidowngrade"),
     "两条条目不能塌成同一个槽位（塌了就不是替代路由了）",
   )
-  assert.equal(displayModelId("deepseek-v4-pro-external"), "deepseek-v4-1-flash-261017 (防降级)")
+  assert.equal(displayModelId("deepseek-v4-pro-external"), "deepseek-v4-1-flash-261017-antidowngrade")
+})
+
+test("0.2.23/0.2.24 的中文后缀显示名仍能归一（改名不打断已有路由）", () => {
+  assert.equal(canonicalModelId("deepseek-v4-1-flash-261017 (防降级)"), "deepseek-v4-pro-external")
+})
+
+test("模型显示名必须是纯 ASCII —— 非 ASCII 会让部分客户端（Copilot）在回复阶段卡死", () => {
+  // issue #15：显示名带全角括号与空格时，VS Code Copilot 选它会一直停在回复中，DSH 下正常。
+  for (const [slot, name] of Object.entries(DISPLAY_BY_SLOT)) {
+    assert.match(name, /^[\x20-\x7e]+$/, `槽位 ${slot} 的显示名含非 ASCII 字符：${name}`)
+  }
 })
