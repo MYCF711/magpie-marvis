@@ -1,20 +1,20 @@
-// tests/loader-model-support.test.mjs —— 模型不可用名单闸（只拦明确不可用的模型）
+// tests/loader-model-support.test.mjs 鈥斺€?妯″瀷涓嶅彲鐢ㄥ悕鍗曢椄锛堝彧鎷︽槑纭笉鍙敤鐨勬ā鍨嬶級
 //
-// 事故现场：手工配置或陈旧路由里写着 `marvis/kimi-k2.5`（上游稳定 5104002 RPC 500）——
-// 这不是 401/403/404，宿主把它当**可重试的上游故障**，同一个请求连打 8 次才放弃，
-// 用户看到的是「卡很久然后 500」。
+// 浜嬫晠鐜板満锛氭墜宸ラ厤缃垨闄堟棫璺敱閲屽啓鐫€ `marvis/kimi-k2.5`锛堜笂娓哥ǔ瀹?5104002 RPC 500锛夆€斺€?
+// 杩欎笉鏄?401/403/404锛屽涓绘妸瀹冨綋**鍙噸璇曠殑涓婃父鏁呴殰**锛屽悓涓€涓姹傝繛鎵?8 娆℃墠鏀惧純锛?
+// 鐢ㄦ埛鐪嬪埌鐨勬槸銆屽崱寰堜箙鐒跺悗 500銆嶃€?
 //
-// 闸门规则（0.2.22 起，TABLE allowlist 已废弃）：
-//   · 只有 context.mjs 的 `isUnavailableModel` 命中的模型（当前只有 `kimi-k2.5`）才本地拦。
-//     TABLE 是**对外展示目录**，不是「上游可用集合」：`app-auto` / `file-auto` /
-//     `computer-auto` / `browser-auto` 等旧真实槽位上游仍然 200，必须继续出网。
-//   · 命中名单 → **本地** 404 `model_unavailable`，一次 fetch 都不发，绝不静默 fallback 到默认模型。
-//   · TABLE 外的其他模型（含随手编的 ID）一律出网，由上游响应决定。
-//   · `main-auto` 作为内部上游槽位继续可用（兼容旧路由），但卡片显示名仍是真实模型名。
-//   · 上游 `4130001` / `无效模型id` 归入模型级 404；`5104002` **不**做全局 404 映射
-//     （那是 RPC 故障，映射成 404 会把能用的模型/账号误标成失效）。
+// 闂搁棬瑙勫垯锛?.2.22 璧凤紝TABLE allowlist 宸插簾寮冿級锛?
+//   路 鍙湁 context.mjs 鐨?`isUnavailableModel` 鍛戒腑鐨勬ā鍨嬶紙褰撳墠鍙湁 `kimi-k2.5`锛夋墠鏈湴鎷︺€?
+//     TABLE 鏄?*瀵瑰灞曠ず鐩綍**锛屼笉鏄€屼笂娓稿彲鐢ㄩ泦鍚堛€嶏細`app-auto` / `file-auto` /
+//     `computer-auto` / `browser-auto` 绛夋棫鐪熷疄妲戒綅涓婃父浠嶇劧 200锛屽繀椤荤户缁嚭缃戙€?
+//   路 鍛戒腑鍚嶅崟 鈫?**鏈湴** 404 `model_unavailable`锛屼竴娆?fetch 閮戒笉鍙戯紝缁濅笉闈欓粯 fallback 鍒伴粯璁ゆā鍨嬨€?
+//   路 TABLE 澶栫殑鍏朵粬妯″瀷锛堝惈闅忔墜缂栫殑 ID锛変竴寰嬪嚭缃戯紝鐢变笂娓稿搷搴斿喅瀹氥€?
+//   路 `main-auto` 浣滀负鍐呴儴涓婃父妲戒綅缁х画鍙敤锛堝吋瀹规棫璺敱锛夛紝浣嗗崱鐗囨樉绀哄悕浠嶆槸鐪熷疄妯″瀷鍚嶃€?
+//   路 涓婃父 `4130001` / `鏃犳晥妯″瀷id` 褰掑叆妯″瀷绾?404锛沗5104002` **涓?*鍋氬叏灞€ 404 鏄犲皠
+//     锛堥偅鏄?RPC 鏁呴殰锛屾槧灏勬垚 404 浼氭妸鑳界敤鐨勬ā鍨?璐﹀彿璇爣鎴愬け鏁堬級銆?
 //
-// 全部离线：mock 掉 globalThis.fetch，不需要真实凭据、不碰真实上游。
+// 鍏ㄩ儴绂荤嚎锛歮ock 鎺?globalThis.fetch锛屼笉闇€瑕佺湡瀹炲嚟鎹€佷笉纰扮湡瀹炰笂娓搞€?
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -24,7 +24,7 @@ import { DISPLAY_BY_SLOT, MODEL_ALIASES } from "../src/context.mjs"
 
 const CHAT_URL = "https://yybadaccess.3g.qq.com/v1/chat/completions"
 
-/** 假凭据：只是形状对，值全部是测试用的假串，不会发到任何真实上游 */
+/** 鍋囧嚟鎹細鍙槸褰㈢姸瀵癸紝鍊煎叏閮ㄦ槸娴嬭瘯鐢ㄧ殑鍋囦覆锛屼笉浼氬彂鍒颁换浣曠湡瀹炰笂娓?*/
 const AUTH = Object.freeze({
   access: "mv_test_offline_only",
   uid: "0123456789abcdef0123456789abcdef",
@@ -35,7 +35,7 @@ const AUTH = Object.freeze({
   },
 })
 
-/** 替换 globalThis.fetch 并记录调用；返回 { calls, restore } */
+/** 鏇挎崲 globalThis.fetch 骞惰褰曡皟鐢紱杩斿洖 { calls, restore } */
 function stubFetch(handler) {
   const calls = []
   const real = globalThis.fetch
@@ -51,14 +51,14 @@ function stubFetch(handler) {
   }
 }
 
-/** 取 loader 描述符（loaderHook 的形状是 getAuth => { fetch, baseURL, apiKey }） */
+/** 鍙?loader 鎻忚堪绗︼紙loaderHook 鐨勫舰鐘舵槸 getAuth => { fetch, baseURL, apiKey }锛?*/
 async function loaderOf() {
   const describe = await loaderHook()(async () => AUTH)
-  assert.equal(typeof describe.fetch, "function", "loader 必须返回 fetch")
+  assert.equal(typeof describe.fetch, "function", "loader 蹇呴』杩斿洖 fetch")
   return describe
 }
 
-/** 组一个 /v1/chat/completions 请求（OpenAI 形状，stream 由参数决定） */
+/** 缁勪竴涓?/v1/chat/completions 璇锋眰锛圤penAI 褰㈢姸锛宻tream 鐢卞弬鏁板喅瀹氾級 */
 function requestFor(model, stream = false) {
   return {
     url: CHAT_URL,
@@ -74,7 +74,7 @@ function requestFor(model, stream = false) {
   }
 }
 
-/** 上游正常回包（200，非流式 JSON） */
+/** 涓婃父姝ｅ父鍥炲寘锛?00锛岄潪娴佸紡 JSON锛?*/
 function upstreamOk(model = "deepseek-v4-1-flash-261017") {
   return new Response(
     JSON.stringify({
@@ -87,7 +87,7 @@ function upstreamOk(model = "deepseek-v4-1-flash-261017") {
   )
 }
 
-/** 上游错误回包：status 是 HTTP 状态，body 里带业务码 / 文案 */
+/** 涓婃父閿欒鍥炲寘锛歴tatus 鏄?HTTP 鐘舵€侊紝body 閲屽甫涓氬姟鐮?/ 鏂囨 */
 function upstreamError(status, payload) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -95,23 +95,23 @@ function upstreamError(status, payload) {
   })
 }
 
-/** 断言「本地 404、没有出网」并检查引导文案 */
+/** 鏂█銆屾湰鍦?404銆佹病鏈夊嚭缃戙€嶅苟妫€鏌ュ紩瀵兼枃妗?*/
 async function assertLocalModelUnavailable(res, calls) {
-  assert.equal(res.status, 404, "未知/失效模型必须在本地回 404")
+  assert.equal(res.status, 404, "鏈煡/澶辨晥妯″瀷蹇呴』鍦ㄦ湰鍦板洖 404")
   const body = await res.json()
   assert.equal(body.error.code, "model_unavailable")
   assert.equal(body.error.type, "upstream_error")
-  assert.match(body.error.message, /重新选择/, "文案要引导用户回模型列表重新选")
-  assert.match(body.error.message, /真实模型名/, "文案要指明选「真实模型名」条目")
-  assert.equal(calls.length, 0, "不支持模型一次 upstream 都不能访问")
+  assert.match(body.error.message, /閲嶆柊閫夋嫨/, "鏂囨瑕佸紩瀵肩敤鎴峰洖妯″瀷鍒楄〃閲嶆柊閫?)
+  assert.match(body.error.message, /鐪熷疄妯″瀷鍚?, "鏂囨瑕佹寚鏄庨€夈€岀湡瀹炴ā鍨嬪悕銆嶆潯鐩?)
+  assert.equal(calls.length, 0, "涓嶆敮鎸佹ā鍨嬩竴娆?upstream 閮戒笉鑳借闂?)
 }
 
-// ─────────────────────────────────────────────────────────────
-// ① 未知 / 已失效模型：本地 404，不出网
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 鈶?鏈煡 / 宸插け鏁堟ā鍨嬶細鏈湴 404锛屼笉鍑虹綉
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("kimi-k2.5（stream:true）→ 本地 404，fetch 0 次（旧实现会出网并透出 500）", async () => {
-  // 上游对 kimi-k2.5 的真实反应：5104002 RPC 500 —— 宿主会当可重试故障，连打 8 次
+test("kimi-k2.5锛坰tream:true锛夆啋 鏈湴 404锛宖etch 0 娆★紙鏃у疄鐜颁細鍑虹綉骞堕€忓嚭 500锛?, async () => {
+  // 涓婃父瀵?kimi-k2.5 鐨勭湡瀹炲弽搴旓細5104002 RPC 500 鈥斺€?瀹夸富浼氬綋鍙噸璇曟晠闅滐紝杩炴墦 8 娆?
   const s = stubFetch(() => upstreamError(500, { code: 5104002, msg: "RPC error" }))
   try {
     const req = requestFor("kimi-k2.5", true)
@@ -122,7 +122,7 @@ test("kimi-k2.5（stream:true）→ 本地 404，fetch 0 次（旧实现会出�
   }
 })
 
-test("kimi-k2.5（stream:false）→ 本地 404，fetch 0 次", async () => {
+test("kimi-k2.5锛坰tream:false锛夆啋 鏈湴 404锛宖etch 0 娆?, async () => {
   const s = stubFetch(() => upstreamError(500, { code: 5104002, msg: "RPC error" }))
   try {
     const req = requestFor("kimi-k2.5", false)
@@ -133,14 +133,14 @@ test("kimi-k2.5（stream:false）→ 本地 404，fetch 0 次", async () => {
   }
 })
 
-test("TABLE 外其他模型不本地拦截：出网 1 次，由上游 4130001 归入 404", async () => {
-  // 这些只是「不在展示目录里」，不等于上游失效 —— 必须真的问上游。
+test("TABLE 澶栧叾浠栨ā鍨嬩笉鏈湴鎷︽埅锛氬嚭缃?1 娆★紝鐢变笂娓?4130001 褰掑叆 404", async () => {
+  // 杩欎簺鍙槸銆屼笉鍦ㄥ睍绀虹洰褰曢噷銆嶏紝涓嶇瓑浜庝笂娓稿け鏁?鈥斺€?蹇呴』鐪熺殑闂笂娓搞€?
   for (const model of ["not-a-model", "glm-5v-turbo-thinking", "memory-compress"]) {
-    const s = stubFetch(() => upstreamError(400, { code: 4130001, msg: "无效模型id" }))
+    const s = stubFetch(() => upstreamError(400, { code: 4130001, msg: "鏃犳晥妯″瀷id" }))
     try {
       const req = requestFor(model, false)
       const res = await (await loaderOf()).fetch(req.url, req.init)
-      assert.equal(s.calls.length, 1, `${model} 不在明确不可用名单里，必须先出网`)
+      assert.equal(s.calls.length, 1, `${model} 涓嶅湪鏄庣‘涓嶅彲鐢ㄥ悕鍗曢噷锛屽繀椤诲厛鍑虹綉`)
       assert.equal(res.status, 404)
       assert.equal((await res.json()).error.code, "model_unavailable")
     } finally {
@@ -149,24 +149,24 @@ test("TABLE 外其他模型不本地拦截：出网 1 次，由上游 4130001 �
   }
 })
 
-// ─────────────────────────────────────────────────────────────
-// ② 合法模型仍然按原路径：显示名 / 旧下标 / 槽位名 → 槽位 → 出网
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 鈶?鍚堟硶妯″瀷浠嶇劧鎸夊師璺緞锛氭樉绀哄悕 / 鏃т笅鏍?/ 妲戒綅鍚?鈫?妲戒綅 鈫?鍑虹綉
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("显示名 deepseek-v4-1-flash-261017 → 归一成 main-auto 后正常出网", async () => {
+test("鏄剧ず鍚?deepseek-v4-1-flash-261017 鈫?褰掍竴鎴?main-auto 鍚庢甯稿嚭缃?, async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017", true)
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 200)
-    assert.equal(s.calls.length, 1, "合法模型必须正常出网")
-    assert.equal(JSON.parse(s.calls[0].init.body).model, "main-auto", "上游只认槽位名")
+    assert.equal(s.calls.length, 1, "鍚堟硶妯″瀷蹇呴』姝ｅ父鍑虹綉")
+    assert.equal(JSON.parse(s.calls[0].init.body).model, "main-auto", "涓婃父鍙妲戒綅鍚?)
   } finally {
     s.restore()
   }
 })
 
-test("旧数字下标 0 → main-auto 正常出网（旧路由不作废）", async () => {
+test("鏃ф暟瀛椾笅鏍?0 鈫?main-auto 姝ｅ父鍑虹綉锛堟棫璺敱涓嶄綔搴燂級", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("0", false)
@@ -179,9 +179,9 @@ test("旧数字下标 0 → main-auto 正常出网（旧路由不作废）", asy
   }
 })
 
-test("内部槽位 main-auto 本身仍被接受（兼容），但显示名不是 main-auto", async () => {
+test("鍐呴儴妲戒綅 main-auto 鏈韩浠嶈鎺ュ彈锛堝吋瀹癸級锛屼絾鏄剧ず鍚嶄笉鏄?main-auto", async () => {
   assert.equal(DEFAULT_MODEL, "main-auto")
-  assert.notEqual(DISPLAY_BY_SLOT["main-auto"], "main-auto", "卡片显示名必须是真实模型名")
+  assert.notEqual(DISPLAY_BY_SLOT["main-auto"], "main-auto", "鍗＄墖鏄剧ず鍚嶅繀椤绘槸鐪熷疄妯″瀷鍚?)
 
   const s = stubFetch(() => upstreamOk())
   try {
@@ -195,7 +195,7 @@ test("内部槽位 main-auto 本身仍被接受（兼容），但显示名不是
   }
 })
 
-test("TABLE 里 8 条槽位 / 显示名 / 旧下标全部放行（当前正常的 8 个模型不许被闸掉）", async () => {
+test("TABLE 閲?8 鏉℃Ы浣?/ 鏄剧ず鍚?/ 鏃т笅鏍囧叏閮ㄦ斁琛岋紙褰撳墠姝ｅ父鐨?8 涓ā鍨嬩笉璁歌闂告帀锛?, async () => {
   assert.equal(Object.keys(DISPLAY_BY_SLOT).length, 8)
   assert.equal(Object.keys(MODEL_ALIASES).length, 8)
 
@@ -212,25 +212,25 @@ test("TABLE 里 8 条槽位 / 显示名 / 旧下标全部放行（当前正常�
     try {
       const req = requestFor(model, false)
       const res = await (await loaderOf()).fetch(req.url, req.init)
-      assert.equal(res.status, 200, `模型 ${model} 应放行`)
-      assert.equal(s.calls.length, 1, `模型 ${model} 应出网`)
-      assert.equal(JSON.parse(s.calls[0].init.body).model, expectedSlot, `模型 ${model} 应归一成 ${expectedSlot}`)
+      assert.equal(res.status, 200, `妯″瀷 ${model} 搴旀斁琛宍)
+      assert.equal(s.calls.length, 1, `妯″瀷 ${model} 搴斿嚭缃慲)
+      assert.equal(JSON.parse(s.calls[0].init.body).model, expectedSlot, `妯″瀷 ${model} 搴斿綊涓€鎴?${expectedSlot}`)
     } finally {
       s.restore()
     }
   }
 })
 
-// ─────────────────────────────────────────────────────────────
-// ③ 上游错误码分类：4130001 / 无效模型id → 404；5104002 不许全局 404
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 鈶?涓婃父閿欒鐮佸垎绫伙細4130001 / 鏃犳晥妯″瀷id 鈫?404锛?104002 涓嶈鍏ㄥ眬 404
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("上游 4130001（无效模型id）→ 404 model_unavailable，不打死账号", async () => {
+test("涓婃父 4130001锛堟棤鏁堟ā鍨媔d锛夆啋 404 model_unavailable锛屼笉鎵撴璐﹀彿", async () => {
   const s = stubFetch(() => upstreamError(400, { code: 4130001, msg: "invalid request" }))
   try {
     const req = requestFor("main-auto", false)
     const res = await (await loaderOf()).fetch(req.url, req.init)
-    assert.equal(s.calls.length, 1, "这是上游返回的分类，必须真的请求过上游")
+    assert.equal(s.calls.length, 1, "杩欐槸涓婃父杩斿洖鐨勫垎绫伙紝蹇呴』鐪熺殑璇锋眰杩囦笂娓?)
     assert.equal(res.status, 404)
     const body = await res.json()
     assert.equal(body.error.code, "model_unavailable")
@@ -239,8 +239,8 @@ test("上游 4130001（无效模型id）→ 404 model_unavailable，不打死账
   }
 })
 
-test("上游只说「无效模型id」没有业务码时也归入 404", async () => {
-  const s = stubFetch(() => upstreamError(400, { error: { message: "无效模型id: xxx" } }))
+test("涓婃父鍙銆屾棤鏁堟ā鍨媔d銆嶆病鏈変笟鍔＄爜鏃朵篃褰掑叆 404", async () => {
+  const s = stubFetch(() => upstreamError(400, { error: { message: "鏃犳晥妯″瀷id: xxx" } }))
   try {
     const req = requestFor("main-auto", false)
     const res = await (await loaderOf()).fetch(req.url, req.init)
@@ -251,25 +251,25 @@ test("上游只说「无效模型id」没有业务码时也归入 404", async ()
   }
 })
 
-test("上游 5104002 RPC 500 原样透出（不全局映射成 404）", async () => {
+test("涓婃父 5104002 RPC 500 鍘熸牱閫忓嚭锛堜笉鍏ㄥ眬鏄犲皠鎴?404锛?, async () => {
   const s = stubFetch(() => upstreamError(500, { code: 5104002, msg: "RPC error" }))
   try {
     const req = requestFor("main-auto", false)
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(s.calls.length, 1)
-    assert.equal(res.status, 500, "5104002 是 RPC 故障，不能当模型失效")
+    assert.equal(res.status, 500, "5104002 鏄?RPC 鏁呴殰锛屼笉鑳藉綋妯″瀷澶辨晥")
     assert.equal((await res.json()).code, 5104002)
   } finally {
     s.restore()
   }
 })
 
-// ─────────────────────────────────────────────────────────────
-// system prompt 含 DSH 标识语句时的 403 诊断（issue #22）
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// system prompt 鍚?DSH 鏍囪瘑璇彞鏃剁殑 403 璇婃柇锛坕ssue #22锛?
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("system prompt 命中 DSH 标识句 + 上游 403 → 改判成可读的 content_filtered", async () => {
-  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+test("system prompt 鍛戒腑 DSH 鏍囪瘑鍙?+ 涓婃父 403 鈫?鏀瑰垽鎴愬彲璇荤殑 content_filtered", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "闈炴硶璇锋眰", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
     const body = JSON.parse(req.init.body)
@@ -281,32 +281,32 @@ test("system prompt 命中 DSH 标识句 + 上游 403 → 改判成可读的 con
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 403)
     const out = await res.json()
-    assert.equal(out.error.code, "content_filtered", "命中标识句时要给出能指路的错误码")
-    assert.match(out.error.message, /QQ 群 451129479/, "要给出拿修复方法的入口")
-    assert.match(out.error.message, /非密钥或登录问题/, "要纠正「API 密钥无效」这个误导")
+    assert.equal(out.error.code, "content_filtered", "鍛戒腑鏍囪瘑鍙ユ椂瑕佺粰鍑鸿兘鎸囪矾鐨勯敊璇爜")
+    assert.match(out.error.message, /QQ 缇?451129479/, "瑕佺粰鍑烘嬁淇鏂规硶鐨勫叆鍙?)
+    assert.match(out.error.message, /闈炲瘑閽ユ垨鐧诲綍闂/, "瑕佺籂姝ｃ€孉PI 瀵嗛挜鏃犳晥銆嶈繖涓瀵?)
   } finally {
     s.restore()
   }
 })
 
-test("普通 system prompt 遇到同样的 403 → 原样透出（不许误判）", async () => {
-  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+test("鏅€?system prompt 閬囧埌鍚屾牱鐨?403 鈫?鍘熸牱閫忓嚭锛堜笉璁歌鍒わ級", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "闈炴硶璇锋眰", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 403)
     const out = await res.json()
-    assert.notEqual(out.error?.code, "content_filtered", "没命中标识句时不许改判")
+    assert.notEqual(out.error?.code, "content_filtered", "娌″懡涓爣璇嗗彞鏃朵笉璁告敼鍒?)
   } finally {
     s.restore()
   }
 })
 
-// ─────────────────────────────────────────────────────────────
-// 自动改写：那句标识句换成 DeepSeek-Harness，用户不用动 DSH 配置
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 鑷姩鏀瑰啓锛氶偅鍙ユ爣璇嗗彞鎹㈡垚 DeepSeek-Harness锛岀敤鎴蜂笉鐢ㄥ姩 DSH 閰嶇疆
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("system prompt 里那句 DSH 标识会被自动改成 DeepSeek-Harness", async () => {
+test("system prompt 閲岄偅鍙?DSH 鏍囪瘑浼氳鑷姩鏀规垚 DeepSeek-Harness", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -321,15 +321,15 @@ test("system prompt 里那句 DSH 标识会被自动改成 DeepSeek-Harness", as
     assert.equal(
       sent.messages[0].content,
       "You are an AI agent powered by DeepSeek-Harness.",
-      "两个词之间要换成连字符（实测这样上游才放行）",
+      "涓や釜璇嶄箣闂磋鎹㈡垚杩炲瓧绗︼紙瀹炴祴杩欐牱涓婃父鎵嶆斁琛岋級",
     )
-    assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+    assert.equal(sent.messages[1].content, "ping", "鍏朵綑娑堟伅涓€涓瓧绗﹂兘涓嶈兘鍔?)
   } finally {
     s.restore()
   }
 })
 
-test("不涉及那句的 system prompt 原样发出", async () => {
+test("涓嶆秹鍙婇偅鍙ョ殑 system prompt 鍘熸牱鍙戝嚭", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -344,11 +344,11 @@ test("不涉及那句的 system prompt 原样发出", async () => {
   }
 })
 
-test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→ 插件一个字节都不改", async () => {
-  // 这是「门禁」而不是「无差别替换」的关键：只认会被拦的原始形态，用户的修复必须原样保留
+test("鐢ㄦ埛宸茬粡鍦?DSH 渚т慨濂斤紙杩炲瓧绗?/ 鐮存姌鍙?/ 鍏虫帀鏁村彞锛夆啋 鎻掍欢涓€涓瓧鑺傞兘涓嶆敼", async () => {
+  // 杩欐槸銆岄棬绂併€嶈€屼笉鏄€屾棤宸埆鏇挎崲銆嶇殑鍏抽敭锛氬彧璁や細琚嫤鐨勫師濮嬪舰鎬侊紝鐢ㄦ埛鐨勪慨澶嶅繀椤诲師鏍蜂繚鐣?
   const alreadyFixed = [
     "You are an AI agent powered by DeepSeek-Harness. Your working directory is /repo.",
-    "You are an AI agent powered by DeepSeek — Harness. Your working directory is /repo.",
+    "You are an AI agent powered by DeepSeek 鈥?Harness. Your working directory is /repo.",
     "You are a coding agent powered by the deepseek model.",
   ]
   for (const text of alreadyFixed) {
@@ -363,19 +363,19 @@ test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→
       assert.equal(
         sent.messages[0].content,
         text,
-        `已经修过的形态不许再动：${text.slice(0, 42)}…`,
+        `宸茬粡淇繃鐨勫舰鎬佷笉璁稿啀鍔細${text.slice(0, 42)}鈥,
       )
     } finally {
       s.restore()
     }
   }
 })
-// ─────────────────────────────────────────────────────────────
-// Claude Code 身份句的 403 诊断（issue #26，错误码 4100406）
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// Claude Code 韬唤鍙ョ殑 403 璇婃柇锛坕ssue #26锛岄敊璇爜 4100406锛?
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原始身份句", async () => {
-  const s = stubFetch(() => upstreamError(403, { code: 4100406, msg: "非法请求" }))
+test("Claude Code 韬唤鍙?+ 403 鈫?鏀瑰啓鎴?Claude-Code锛屼笖璇婃柇鎸囧洖鍘熷韬唤鍙?, async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 4100406, msg: "闈炴硶璇锋眰" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
     const body = JSON.parse(req.init.body)
@@ -385,27 +385,27 @@ test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 403)
     const out = await res.json()
-    assert.equal(out.error.code, "content_filtered", "命中 Claude 身份句时要给出能指路的错误码")
-    assert.match(out.error.message, /QQ 群 451129479/, "要给出拿修复方法的入口")
+    assert.equal(out.error.code, "content_filtered", "鍛戒腑 Claude 韬唤鍙ユ椂瑕佺粰鍑鸿兘鎸囪矾鐨勯敊璇爜")
+    assert.match(out.error.message, /QQ 缇?451129479/, "瑕佺粰鍑烘嬁淇鏂规硶鐨勫叆鍙?)
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
       "You are Claude-Code, Anthropic's official CLI for Claude.",
-      "0.2.32 起会在本地把身份短语改写成连字符形态（改写后仍 403 时才走上面那条诊断）",
+      "0.2.32 璧蜂細鍦ㄦ湰鍦版妸韬唤鐭鏀瑰啓鎴愯繛瀛楃褰㈡€侊紙鏀瑰啓鍚庝粛 403 鏃舵墠璧颁笂闈㈤偅鏉¤瘖鏂級",
     )
   } finally {
     s.restore()
   }
 })
 
-// ─────────────────────────────────────────────────────────────
-// 同一类内容过滤：Codex Desktop / Claude Desktop 的身份句
-// 2026-11-15 直打上游实测（只换 system prompt 第一句，其余完全一样）：
-//   Codex 原句 → 403；`Codex-CLI` → 200
-//   Claude 原句 → 403；`Claude-Code` → 200
-// ─────────────────────────────────────────────────────────────
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 鍚屼竴绫诲唴瀹硅繃婊わ細Codex Desktop / Claude Desktop 鐨勮韩浠藉彞
+// 2026-11-15 鐩存墦涓婃父瀹炴祴锛堝彧鎹?system prompt 绗竴鍙ワ紝鍏朵綑瀹屽叏涓€鏍凤級锛?
+//   Codex 鍘熷彞 鈫?403锛沗Codex-CLI` 鈫?200
+//   Claude 鍘熷彞 鈫?403锛沗Claude-Code` 鈫?200
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
 
-test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
+test("Codex Desktop 鐨勮韩浠藉彞浼氳鑷姩鏀瑰啓鎴?Codex-CLI", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -426,15 +426,15 @@ test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
       sent.messages[0].content,
       "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant. " +
         "Codex CLI is an open source project led by OpenAI.",
-      "只改开头身份短语里的那个空格，后面的 `Codex CLI` 原样保留",
+      "鍙敼寮€澶磋韩浠界煭璇噷鐨勯偅涓┖鏍硷紝鍚庨潰鐨?`Codex CLI` 鍘熸牱淇濈暀",
     )
-    assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+    assert.equal(sent.messages[1].content, "ping", "鍏朵綑娑堟伅涓€涓瓧绗﹂兘涓嶈兘鍔?)
   } finally {
     s.restore()
   }
 })
 
-test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () => {
+test("Claude Desktop 鐨勮韩浠藉彞浼氳鑷姩鏀瑰啓鎴?Claude-Code", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -453,15 +453,15 @@ test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () =>
     assert.equal(
       sent.messages[0].content,
       "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
-      "只改 `Claude Code` 这一处，第二处 `Claude` 不动",
+      "鍙敼 `Claude Code` 杩欎竴澶勶紝绗簩澶?`Claude` 涓嶅姩",
     )
-    assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+    assert.equal(sent.messages[1].content, "ping", "鍏朵綑娑堟伅涓€涓瓧绗﹂兘涓嶈兘鍔?)
   } finally {
     s.restore()
   }
 })
 
-test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", async () => {
+test("瀹㈡埛绔凡缁忓啓鎴?Codex-CLI / Claude-Code 鈫?涓€涓瓧鑺傞兘涓嶆敼", async () => {
   const alreadyFixed = [
     "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant.",
     "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
@@ -475,9 +475,109 @@ test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", 
       req.init.body = JSON.stringify(body)
       await (await loaderOf()).fetch(req.url, req.init)
       const sent = JSON.parse(s.calls[0].init.body)
-      assert.equal(sent.messages[0].content, text, `已经修过的形态不许再动：${text.slice(0, 42)}…`)
+      assert.equal(sent.messages[0].content, text, `宸茬粡淇繃鐨勫舰鎬佷笉璁稿啀鍔細${text.slice(0, 42)}鈥)
     } finally {
       s.restore()
     }
+  }
+})
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+// 涓枃 / 鏈湴鍖栬韩浠藉彞锛?026-11-16 澶嶆祴锛?
+//
+// 鍒ゆ嵁鏄€?*system 棣栬 + 璇嶅 + 鍗曚釜绌烘牸**銆嶏紝涓嶆槸銆屼笁鍙ヨ嫳鏂囨ā鏉裤€嶏細
+//   system 绗?1 琛?`浣犳槸涓€涓敱 DeepSeek Harness 椹卞姩鐨?AI 鏅鸿兘浣撱€俙   鈫?403 闈炴硶璇锋眰
+//   system 绗?1 琛?鍏ㄥ皬鍐?/ 鍙ユ湯鍔?!                               鈫?403
+//   system 绗?2 琛?/ user 瑙掕壊閲岀殑鍚屼竴鍙?                           鈫?200
+// 鈬?鏃х増鍙鑻辨枃鏁村彞锛屼腑鏂囧啓娉曟棦涓嶆敼鍐欎篃涓嶈瘖鏂紝鐢ㄦ埛鐪嬪埌鐨勬槸鍘熷 403
+//   锛堝涓诲啀缈绘垚銆孉PI 瀵嗛挜鏃犳晥銆嶏級鈥斺€?杩欏氨鏄湰鏉＄敤渚嬭閿佷綇鐨勫洖褰掋€?
+// 鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€鈹€
+
+test("涓枃韬唤鍙ュ啓鍦?system 棣栬 鈫?鑷姩鏀瑰啓锛屼笖 403 鏀瑰垽鎴?content_filtered", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "闈炴硶璇锋眰", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "浣犳槸涓€涓敱 DeepSeek Harness 椹卞姩鐨?AI 鏅鸿兘浣撱€? }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.messages[0].content, "浣犳槸涓€涓敱 DeepSeek-Harness 椹卞姩鐨?AI 鏅鸿兘浣撱€?, "涓枃鍐欐硶鍚屾牱瑕佹妸璇嶉棿绌烘牸鎹㈡垚杩炲瓧绗?)
+    assert.equal(res.status, 403)
+    assert.equal((await res.json()).error.code, "content_filtered", "涓枃鍐欐硶涓嶈閫€鍖栨垚鍘熷 403")
+  } finally {
+    s.restore()
+  }
+})
+
+test("韬唤鍙ヤ笉鍦?system 棣栬锛堢 2 琛?/ user 瑙掕壊锛夆啋 涓€涓瓧鑺傞兘涓嶆敼", async () => {
+  const cases = [
+    [{ role: "system", content: "浣犳槸涓€涓姪鎵嬨€俓n浣犳槸涓€涓敱 DeepSeek Harness 椹卞姩鐨?AI 鏅鸿兘浣撱€? }, { role: "user", content: "ping" }],
+    [{ role: "user", content: "浣犳槸涓€涓敱 DeepSeek Harness 椹卞姩鐨?AI 鏅鸿兘浣撱€? }],
+    [{ role: "system", content: "You are a helpful assistant." }, { role: "assistant", content: "You are an AI agent powered by DeepSeek Harness." }, { role: "user", content: "ping" }],
+  ]
+  for (const messages of cases) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = messages
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.deepEqual(sent.messages, messages, "涓婃父鏈潵灏辨斁琛岀殑浣嶇疆锛屼笉璁告敼锛堟敼浜嗘槸澶氫綑鏀瑰姩锛?)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("鍏ㄥ皬鍐?/ 鍙ユ湯鍔犳劅鍙瑰彿鐨勮韩浠藉彞鐓ф牱浼氳鎷︼紝涔熺収鏍疯鏀瑰啓", async () => {
+  const variants = [
+    ["you are an ai agent powered by deepseek harness.", "you are an ai agent powered by deepseek-harness."],
+    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent powered by DeepSeek-Harness!"],
+  ]
+  for (const [input, expected] of variants) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: input }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, expected)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("Codex 韬唤鍙ヨ鎷︽椂涔熻缁?content_filtered 璇婃柇锛堟棫鐗堝彧鏈?DSH 涓?Claude 涓ゆ潯鍒嗘敮锛?, async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "闈炴硶璇锋眰", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "You are a coding agent running in the Codex CLI, a terminal-based coding assistant." }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    assert.equal((await res.json()).error.code, "content_filtered")
+  } finally {
+    s.restore()
+  }
+})
+
+test("system 棣栬娌℃湁韬唤鐭鏃讹紝403 浠嶇劧鍘熸牱閫忓嚭锛堜笉璁告妸鏅€?403 璇垽鎴愬唴瀹硅繃婊わ級", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "闈炴硶璇锋眰", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    assert.notEqual((await res.json()).error?.code, "content_filtered")
+  } finally {
+    s.restore()
   }
 })
