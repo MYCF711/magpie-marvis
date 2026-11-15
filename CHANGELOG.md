@@ -3,18 +3,30 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
-## 0.2.31 — 2026-11-15
+## 0.2.32 — 2026-11-15
 
-**修复（Codex / Claude Desktop 的新会话 403）+ 补齐推理挡位**
+**修复（Codex / Claude Desktop 的新会话 403）+ 补齐 DeepSeek 推理挡位**
 
 - 身份句改写扩到三家：`DeepSeek Harness`、`Codex CLI`、`Claude Code` 都换成连字符形态
   （`DeepSeek-Harness` / `Codex-CLI` / `Claude-Code`）—— 2026-11-15 直打上游实测：
-  原句 403「非法请求」，连字符 200；只改身份短语里的一个空格，其余字节不动
+  原句 403「非法请求」，连字符 200；只改身份短语里的一个空格，其余字节不动（贡献：@BangShou1st）
 - 背景：Marvis 的内容过滤按「产品身份」定点拦截；新会话会把身份句放在 system prompt 开头，
   老会话续聊不会 —— 所以表现是「老会话能用、新会话全 403」
-- DeepSeek 两条 4.1f 条目补 `variants: low/high/max`：此前不声明，DSH 接入页的
-  `reasoningEfforts` 会缺这组挡位，Codex 目录则生成 low/medium/high/ultra（缺 max）
-- 验收：测试 155 项中 151 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+- DeepSeek 两条 4.1f 条目补 `variants: low/high/max`：不声明时 DSH 接入页的 `reasoningEfforts`
+  会缺这组挡位，Codex 目录则生成 low/medium/high/ultra（缺 max）（贡献：@BangShou1st）
+- 保留 0.2.31 的兜底诊断：改写生效后若仍 403，错误信息仍会指出命中哪句身份声明
+- 验收：测试 158 项中 154 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
+## 0.2.31 — 2026-11-15
+
+**修复（Claude Code 的身份句被上游拦时，错误信息能指路）**
+
+- 触发：上游 403 + 请求体含 `You are Claude Code, Anthropic's official CLI for Claude.`
+  （2026-11-15 实测，错误码 `4100406`，issue #26）
+- 命中时返回 `content_filtered` 并给出可执行改写（`Claude Code` → `Claude-Code`，实测放行）；
+  **只诊断、不替第三方工具改 prompt** —— 改不改是调用方自己的决定
+- 顺带测到：`You are a Claude agent, built on Anthropic's Claude Agent SDK.` 这句**不触发**
+- 验收：测试 150 项中 146 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
 
 ## 0.2.30 — 2026-11-15
 

@@ -370,6 +370,33 @@ test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→
     }
   }
 })
+// ─────────────────────────────────────────────────────────────
+// Claude Code 身份句的 403 诊断（issue #26，错误码 4100406）
+// ─────────────────────────────────────────────────────────────
+
+test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原始身份句", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 4100406, msg: "非法请求" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    const claudeIdentity = "You are Claude Code, Anthropic's official CLI for Claude."
+    body.messages = [{ role: "system", content: claudeIdentity }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    const out = await res.json()
+    assert.equal(out.error.code, "content_filtered", "命中 Claude 身份句时要给出能指路的错误码")
+    assert.match(out.error.message, /Claude-Code/, "要给出可执行的改写")
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(
+      sent.messages[0].content,
+      "You are Claude-Code, Anthropic's official CLI for Claude.",
+      "0.2.32 起会在本地把身份短语改写成连字符形态（改写后仍 403 时才走上面那条诊断）",
+    )
+  } finally {
+    s.restore()
+  }
+})
 
 // ─────────────────────────────────────────────────────────────
 // 同一类内容过滤：Codex Desktop / Claude Desktop 的身份句
