@@ -370,3 +370,87 @@ test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→
     }
   }
 })
+
+// ─────────────────────────────────────────────────────────────
+// 同一类内容过滤：Codex Desktop / Claude Desktop 的身份句
+// 2026-11-15 直打上游实测（只换 system prompt 第一句，其余完全一样）：
+//   Codex 原句 → 403；`Codex-CLI` → 200
+//   Claude 原句 → 403；`Claude-Code` → 200
+// ─────────────────────────────────────────────────────────────
+
+test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      {
+        role: "system",
+        content:
+          "You are a coding agent running in the Codex CLI, a terminal-based coding assistant. " +
+          "Codex CLI is an open source project led by OpenAI.",
+      },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(
+      sent.messages[0].content,
+      "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant. " +
+        "Codex CLI is an open source project led by OpenAI.",
+      "只改开头身份短语里的那个空格，后面的 `Codex CLI` 原样保留",
+    )
+    assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+  } finally {
+    s.restore()
+  }
+})
+
+test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      {
+        role: "system",
+        content:
+          "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+      },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(
+      sent.messages[0].content,
+      "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+      "只改 `Claude Code` 这一处，第二处 `Claude` 不动",
+    )
+    assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+  } finally {
+    s.restore()
+  }
+})
+
+test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", async () => {
+  const alreadyFixed = [
+    "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant.",
+    "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+  ]
+  for (const text of alreadyFixed) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: text }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, text, `已经修过的形态不许再动：${text.slice(0, 42)}…`)
+    } finally {
+      s.restore()
+    }
+  }
+})
