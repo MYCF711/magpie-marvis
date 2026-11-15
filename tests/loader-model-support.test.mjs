@@ -263,3 +263,41 @@ test("上游 5104002 RPC 500 原样透出（不全局映射成 404）", async ()
     s.restore()
   }
 })
+
+// ─────────────────────────────────────────────────────────────
+// system prompt 含 DSH 标识语句时的 403 诊断（issue #22）
+// ─────────────────────────────────────────────────────────────
+
+test("system prompt 命中 DSH 标识句 + 上游 403 → 改判成可读的 content_filtered", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      { role: "system", content: "You are an AI agent powered by DeepSeek Harness." },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    const out = await res.json()
+    assert.equal(out.error.code, "content_filtered", "命中标识句时要给出能指路的错误码")
+    assert.match(out.error.message, /includeHarnessIdentity/, "要指到具体开关")
+    assert.match(out.error.message, /与登录态、密钥都无关/, "要纠正「API 密钥无效」这个误导")
+  } finally {
+    s.restore()
+  }
+})
+
+test("普通 system prompt 遇到同样的 403 → 原样透出（不许误判）", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 403)
+    const out = await res.json()
+    assert.notEqual(out.error?.code, "content_filtered", "没命中标识句时不许改判")
+  } finally {
+    s.restore()
+  }
+})

@@ -32,6 +32,21 @@ const RISK_BLOCK = /4100404|风控拦截/
 const AUTH_EXPIRED = /4100403|登录态过期|未登录/
 
 /**
+ * Marvis 的内容过滤会**精确**拦下这句（issue #22，2026-11-15 实测）。
+ *
+ * 直打上游、只换 system prompt，其他一模一样：
+ *   `You are a helpful assistant.`                                  → 200
+ *   `You are an AI agent powered by DeepSeek Harness.`               → 403 非法请求
+ *   `You are an assistant. Powered by DeepSeek Harness.`             → 200
+ *   `You are an AI agent powered by DeepSeek.`                        → 200
+ *
+ * 少一个词就不触发 ⇒ 上游是定点匹配，基本可以认定是定向封 DSH。
+ * 命中时上游回 403「非法请求」，而 DSH 会把它显示成「API 密钥无效」，完全指不到原因 ——
+ * 所以这里只做**错误文案**的诊断，不改请求、不拦请求。
+ */
+const HARNESS_IDENTITY_PROMPT = /You are an AI agent powered by DeepSeek Harness/i
+
+/**
  * 构造一个错误 Response。
  * @param {number} status
  * @param {string} code
@@ -131,7 +146,11 @@ export function loaderHook() {
         let body = init?.body
         /** @type {string | null} 命中「明确不可用」名单的模型 ID */
         let unavailableModel = null
+        /** 请求体里是否含被上游内容过滤定向拦截的 DSH 标识语句 */
+        let harnessIdentityPrompt = false
         if (typeof body === "string") {
+          // 只做标记，不改 body —— 命中与否只影响错误文案
+          harnessIdentityPrompt = HARNESS_IDENTITY_PROMPT.test(body)
           let json = null
           try {
             json = JSON.parse(body)
@@ -227,6 +246,16 @@ export function loaderHook() {
         if (MODEL_ISSUE.test(text) || response.status === 404) {
           // 模型级错误 → 404，只搁置这个模型，不打死账号（AGENTS 坑 6）
           return errorResponse(404, "model_unavailable", `该模型在当前账号不可用：${text.slice(0, 300)}`)
+        }
+        if (response.status === 403 && harnessIdentityPrompt && /非法请求|permission_error/i.test(text)) {
+          // 不拦请求、不改 prompt —— 只是让错误说得清（否则宿主一律显示「API 密钥无效」）
+          return errorResponse(
+            403,
+            "content_filtered",
+            "上游把这句 system prompt 判成了非法请求（内容过滤），与登录态、密钥都无关。" +
+              "命中的是 `You are an AI agent powered by DeepSeek Harness.` —— " +
+              "在 DSH 的 profile 里设 `includeHarnessIdentity: false`（或改写这句开场白）后重试。",
+          )
         }
         // 其余原样透出
         return new Response(text || null, {
