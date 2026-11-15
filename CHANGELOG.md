@@ -3,6 +3,17 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.26 — 2026-11-15
+
+**修复（`main-auto` 被声明成不收图，贴图直接 400）**
+
+- `main-auto` 补 `vision: true`：上游 `deepseek-v4-1-flash-261017` 本来能识图，但 TABLE 里没标能力
+  ⇒ 默认槽位被声明成 text-only ⇒ magpie 在入口就把带图请求 400 掉（定位来自 @ATCThunder，issue #8）
+- 图片输入归一：http(s) 图片 URL 下载后转 `data:` URI（含 SSRF 防护、禁重定向）、裸 base64 补成
+  data URI、Anthropic `image/source` 显式转换 —— 转不了时本地 400，不再静默丢图
+- README 的模型清单去掉已不存在的「DeepSeek V4 Pro」，并注明两条 V4.1 Flash 路由都能识图
+- 验收：测试 143 项中 139 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.25 — 2026-11-15
 
 **修复（0.2.23 的「防降级」条目会让部分客户端卡死）**
