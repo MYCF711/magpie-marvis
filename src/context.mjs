@@ -109,7 +109,11 @@ const TABLE = [
   //   不是名字暗示的 pro —— 显示名跟着实际值走，并加后缀与上面的 main-auto 区分。
   //   留这条的理由：auto 家族（main-auto / file-auto / computer-auto / browser-auto）
   //   在服务端是**按账号**改路由的，这条固定映射不受影响 —— 账号被改路由时它是可用的替代槽位。
-  ["deepseek-v4-pro-external", "deepseek-v4-1-flash-261017 (防降级)", 1_000_000, { reasoning: true, tools: true }],
+  //
+  // ⚠ 2026-11-15：后缀**必须是纯 ASCII、不能有空格与全角括号**（此前用的是 ` (防降级)`）。
+  //   用户实测在 VS Code Copilot 里选它会在回复阶段一直卡住（DSH 下同一条正常，见 issue #15）——
+  //   模型名带空格/中文在客户端那一层会被拿去做 header 或 URL 处理，非 ASCII 会出问题。
+  ["deepseek-v4-pro-external", "deepseek-v4-1-flash-261017-antidowngrade", 1_000_000, { reasoning: true, tools: true }],
   ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 1_000_000, { reasoning: true, tools: true }],
 
   // ── 其他厂商 ─────────────────────────────────────────────────
@@ -151,6 +155,9 @@ export const DISPLAY_BY_SLOT = Object.freeze(
  */
 const LEGACY_DISPLAY_ALIASES = Object.freeze({
   "deepseek-v4-pro-202606": "deepseek-v4-pro-external",
+  // 0.2.23 / 0.2.24 用过的带中文后缀的显示名。0.2.25 换成纯 ASCII（见 TABLE 里的注释），
+  // 已经写好它的路由组不能因此 400。
+  "deepseek-v4-1-flash-261017 (防降级)": "deepseek-v4-pro-external",
 })
 
 /** 真实模型名 → 上游接受的槽位名 */
