@@ -104,7 +104,7 @@ const TABLE = [
   //   kimi-k2.5（500 RPC）· hunyuan-2.0-instruct-20251111（空响应）· venus-vision-llm（→ default）
 
   // ── DeepSeek ────────────────────────────────────────────────
-  ["main-auto", "deepseek-v4-1-flash-261017", 1_000_000, { reasoning: true, tools: true }],
+  ["main-auto", "deepseek-v4-1-flash-261017", 1_000_000, { reasoning: true, tools: true, vision: true }],
   // ⚠ 2026-11-13 实测：`deepseek-v4-pro-external` 回的是 `deepseek-v4-1-flash-261017`，
   //   不是名字暗示的 pro —— 显示名跟着实际值走，并加后缀与上面的 main-auto 区分。
   //   留这条的理由：auto 家族（main-auto / file-auto / computer-auto / browser-auto）

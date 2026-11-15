@@ -12,6 +12,7 @@
 import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, canonicalModelId, isUnavailableModel } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
 import { normalizeTools } from "../marvis/tool-schema.mjs"
+import { InvalidImageError, normalizeMessages } from "../marvis/images.mjs"
 
 /**
  * 上游说「模型不行」的信号 —— 只收**模型级**的，映射成 404（搁置这个模型，不打死账号）。
@@ -131,8 +132,13 @@ export function loaderHook() {
         /** @type {string | null} 命中「明确不可用」名单的模型 ID */
         let unavailableModel = null
         if (typeof body === "string") {
+          let json = null
           try {
-            const json = JSON.parse(body)
+            json = JSON.parse(body)
+          } catch {
+            /* 不是 JSON 就原样转发 */
+          }
+          if (json && typeof json === "object") {
             let changed = false
             const canonical = canonicalModelId(json.model)
             if (canonical !== json.model) {
@@ -143,13 +149,28 @@ export function loaderHook() {
               // 明确不可用名单（当前只有 kimi-k2.5）：本地挡掉，不出网、不 fallback。
               unavailableModel = String(json.model)
             }
-            // 其余模型（含 TABLE 外的旧真实槽位）一律出网，可用性由上游响应决定。
-            // Marvis 要求每个工具 parameters 显式 type:"object"；
-            // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
-            const tools = normalizeTools(json.tools)
-            if (tools !== json.tools) {
-              json.tools = tools
-              changed = true
+            if (unavailableModel === null) {
+              // Marvis 要求每个工具 parameters 显式 type:"object"；
+              // DSH 的部分工具省略了它，缺一个就 400 invalid parameter。
+              const tools = normalizeTools(json.tools)
+              if (tools !== json.tools) {
+                json.tools = tools
+                changed = true
+              }
+              try {
+                // 图片 URL / 裸 base64 / Anthropic image 显式归一为 data URI；
+                // 转换不了就本地 400，不再静默丢图或把无效输入交给上游。
+                const messages = await normalizeMessages(json.messages)
+                if (messages !== json.messages) {
+                  json.messages = messages
+                  changed = true
+                }
+              } catch (err) {
+                if (err instanceof InvalidImageError) {
+                  return errorResponse(400, "invalid_image", `图片输入无效：${err.message}`)
+                }
+                throw err
+              }
             }
             if (changed) {
               body = JSON.stringify(json)
@@ -159,8 +180,6 @@ export function loaderHook() {
               delete merged["content-encoding"]
               delete merged["Content-Encoding"]
             }
-          } catch {
-            /* 不是 JSON 就原样转发 */
           }
         }
 
