@@ -301,3 +301,45 @@ test("普通 system prompt 遇到同样的 403 → 原样透出（不许误判�
     s.restore()
   }
 })
+
+// ─────────────────────────────────────────────────────────────
+// 自动改写：那句标识句换成 DeepSeek-Harness，用户不用动 DSH 配置
+// ─────────────────────────────────────────────────────────────
+
+test("system prompt 里那句 DSH 标识会被自动改成 DeepSeek-Harness", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      { role: "system", content: "You are an AI agent powered by DeepSeek Harness." },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(
+      sent.messages[0].content,
+      "You are an AI agent powered by DeepSeek-Harness.",
+      "两个词之间要换成连字符（实测这样上游才放行）",
+    )
+    assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+  } finally {
+    s.restore()
+  }
+})
+
+test("不涉及那句的 system prompt 原样发出", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.messages[0].content, "You are a helpful assistant.")
+  } finally {
+    s.restore()
+  }
+})
