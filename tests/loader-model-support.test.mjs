@@ -343,3 +343,30 @@ test("不涉及那句的 system prompt 原样发出", async () => {
     s.restore()
   }
 })
+
+test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→ 插件一个字节都不改", async () => {
+  // 这是「门禁」而不是「无差别替换」的关键：只认会被拦的原始形态，用户的修复必须原样保留
+  const alreadyFixed = [
+    "You are an AI agent powered by DeepSeek-Harness. Your working directory is /repo.",
+    "You are an AI agent powered by DeepSeek — Harness. Your working directory is /repo.",
+    "You are a coding agent powered by the deepseek model.",
+  ]
+  for (const text of alreadyFixed) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: text }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(
+        sent.messages[0].content,
+        text,
+        `已经修过的形态不许再动：${text.slice(0, 42)}…`,
+      )
+    } finally {
+      s.restore()
+    }
+  }
+})
