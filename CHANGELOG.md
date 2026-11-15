@@ -3,6 +3,17 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.31 — 2026-11-15
+
+**修复（Claude Code 的身份句被上游拦时，错误信息能指路）**
+
+- 触发：上游 403 + 请求体含 `You are Claude Code, Anthropic's official CLI for Claude.`
+  （2026-11-15 实测，错误码 `4100406`，issue #26）
+- 命中时返回 `content_filtered` 并给出可执行改写（`Claude Code` → `Claude-Code`，实测放行）；
+  **只诊断、不替第三方工具改 prompt** —— 改不改是调用方自己的决定
+- 顺带测到：`You are a Claude agent, built on Anthropic's Claude Agent SDK.` 这句**不触发**
+- 验收：测试 150 项中 146 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.30 — 2026-11-15
 
 **测试（锁住「门禁」语义：只改会被拦的形态，用户已修好的一个字节都不动）**

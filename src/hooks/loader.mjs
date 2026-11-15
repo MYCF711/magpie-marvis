@@ -57,6 +57,20 @@ const HARNESS_IDENTITY_PROMPT = /You are an AI agent powered by DeepSeek Harness
 const HARNESS_IDENTITY_REWRITE = /(You are an AI agent powered by DeepSeek)\s+(Harness)/i
 
 /**
+ * Claude Code 的身份句会被**同一套**内容过滤拦下（issue #26，2026-11-15 实测，错误码 4100406）。
+ *
+ * 直打上游、只换 system prompt：
+ *   `You are Claude Code, Anthropic's official CLI for Claude.`      → 403 4100406
+ *   `You are Claude-Code, Anthropic's official CLI for Claude.`      → 200
+ *   `You are Claude — Code, …`                                        → 200
+ *   `You are a Claude agent, built on Anthropic's Claude Agent SDK.`  → 200（这句不触发）
+ *
+ * ⚠ 这里**只做错误文案诊断**，不替第三方工具改写 prompt —— 改不改、怎么改，
+ *   是调用方（Claude Code / Codex 之类）自己的决定，插件越权改会有副作用。
+ */
+const CLAUDE_IDENTITY_PROMPT = /You are Claude Code,\s*Anthropic's official CLI for Claude/i
+
+/**
  * 构造一个错误 Response。
  * @param {number} status
  * @param {string} code
@@ -293,6 +307,20 @@ export function loaderHook() {
             "上游把这句 system prompt 判成了非法请求（内容过滤），与登录态、密钥都无关。" +
               "命中的是 `You are an AI agent powered by DeepSeek Harness.` —— " +
               "在 DSH 的 profile 里设 `includeHarnessIdentity: false`（或改写这句开场白）后重试。",
+          )
+        }
+        if (
+          response.status === 403 &&
+          typeof body === "string" &&
+          CLAUDE_IDENTITY_PROMPT.test(body) &&
+          /非法请求|permission_error/i.test(text)
+        ) {
+          return errorResponse(
+            403,
+            "content_filtered",
+            "上游把 Claude Code 的身份句判成了非法请求（内容过滤），与密钥、登录态都无关。" +
+              "命中的是 `You are Claude Code, Anthropic's official CLI for Claude.` —— " +
+              "把 `Claude Code` 改写成 `Claude-Code`（或 `Claude — Code`）即可放行，2026-11-15 实测有效。",
           )
         }
         // 其余原样透出
