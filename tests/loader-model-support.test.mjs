@@ -282,8 +282,8 @@ test("system prompt 命中 DSH 标识句 + 上游 403 → 改判成可读的 con
     assert.equal(res.status, 403)
     const out = await res.json()
     assert.equal(out.error.code, "content_filtered", "命中标识句时要给出能指路的错误码")
-    assert.match(out.error.message, /includeHarnessIdentity/, "要指到具体开关")
-    assert.match(out.error.message, /与登录态、密钥都无关/, "要纠正「API 密钥无效」这个误导")
+    assert.match(out.error.message, /QQ 群 451129479/, "要给出拿修复方法的入口")
+    assert.match(out.error.message, /非密钥或登录问题/, "要纠正「API 密钥无效」这个误导")
   } finally {
     s.restore()
   }
@@ -386,7 +386,7 @@ test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原
     assert.equal(res.status, 403)
     const out = await res.json()
     assert.equal(out.error.code, "content_filtered", "命中 Claude 身份句时要给出能指路的错误码")
-    assert.match(out.error.message, /Claude-Code/, "要给出可执行的改写")
+    assert.match(out.error.message, /QQ 群 451129479/, "要给出拿修复方法的入口")
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,

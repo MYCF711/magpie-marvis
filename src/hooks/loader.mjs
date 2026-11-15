@@ -75,6 +75,16 @@ const IDENTITY_REWRITES = [
 const CLAUDE_IDENTITY_PROMPT = /You are Claude Code,\s*Anthropic's official CLI for Claude/i
 
 /**
+ * 上游内容过滤拦截时的**统一**提示。
+ *
+ * ⚠ 刻意**不点名**任何 agent / 身份句 —— 被拦的可能有很多家（DSH、Codex、Claude Desktop，
+ *   以及还没测到的），写死一家会在别家命中时把人带偏。只留两件确定的事：
+ *   ① 性质是内容过滤，不是密钥或登录；② 修复方法在群里。
+ */
+const CONTENT_FILTER_HINT =
+  "上游内容过滤拦截（非密钥或登录问题），修复方法见 QQ 群 451129479。"
+
+/**
  * 构造一个错误 Response。
  * @param {number} status
  * @param {string} code
@@ -309,28 +319,12 @@ export function loaderHook() {
           // 模型级错误 → 404，只搁置这个模型，不打死账号（AGENTS 坑 6）
           return errorResponse(404, "model_unavailable", `该模型在当前账号不可用：${text.slice(0, 300)}`)
         }
-        if (response.status === 403 && harnessIdentityPrompt && /非法请求|permission_error/i.test(text)) {
-          // 不拦请求、不改 prompt —— 只是让错误说得清（否则宿主一律显示「API 密钥无效」）
-          return errorResponse(
-            403,
-            "content_filtered",
-            "上游把这句 system prompt 判成了非法请求（内容过滤），与登录态、密钥都无关。" +
-              "命中的是 `You are an AI agent powered by DeepSeek Harness.` —— " +
-              "在 DSH 的 profile 里设 `includeHarnessIdentity: false`（或改写这句开场白）后重试。",
-          )
-        }
-        if (
-          response.status === 403 &&
-          CLAUDE_IDENTITY_PROMPT.test(originalBody) &&
-          /非法请求|permission_error/i.test(text)
-        ) {
-          return errorResponse(
-            403,
-            "content_filtered",
-            "上游把 Claude Code 的身份句判成了非法请求（内容过滤），与密钥、登录态都无关。" +
-              "命中的是 `You are Claude Code, Anthropic's official CLI for Claude.` —— " +
-              "把 `Claude Code` 改写成 `Claude-Code`（或 `Claude — Code`）即可放行，2026-11-15 实测有效。",
-          )
+        // ⚠ 不点名具体 agent / 身份句：被拦的可能有很多家，写死一家会在别家命中时误导。
+        //   只传达确定的事 —— 性质（内容过滤，非密钥/登录）+ 修复方法去哪拿。
+        const contentFilterSuspect =
+          harnessIdentityPrompt || CLAUDE_IDENTITY_PROMPT.test(originalBody)
+        if (response.status === 403 && contentFilterSuspect && /非法请求|permission_error/i.test(text)) {
+          return errorResponse(403, "content_filtered", CONTENT_FILTER_HINT)
         }
         // 其余原样透出
         return new Response(text || null, {
