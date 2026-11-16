@@ -113,7 +113,7 @@ const TABLE = [
   // ⚠ 2026-11-15：后缀**必须是纯 ASCII、不能有空格与全角括号**（此前用的是 ` (防降级)`）。
   //   用户实测在 VS Code Copilot 里选它会在回复阶段一直卡住（DSH 下同一条正常，见 issue #15）——
   //   模型名带空格/中文在客户端那一层会被拿去做 header 或 URL 处理，非 ASCII 会出问题。
-  ["deepseek-v4-pro-external", "deepseek-v4-1-flash-261017-antidowngrade", 1_000_000, { reasoning: true, tools: true, efforts: ["low", "high", "max"] }],
+  ["deepseek-v4-pro-external", "deepseek-v4-1-flash-261017-antidowngrade", 1_000_000, { reasoning: true, tools: true, vision: true, efforts: ["low", "high", "max"] }],
   ["hy3-preview-agent", "deepseek-v4-flash-ga-260731", 1_000_000, { reasoning: true, tools: true }],
 
   // ── 其他厂商 ─────────────────────────────────────────────────
