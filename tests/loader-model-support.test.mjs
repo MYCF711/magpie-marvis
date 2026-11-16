@@ -283,7 +283,7 @@ test("system prompt 命中 DSH 标识句 + 上游 403 → 改判成可读的 con
     const out = await res.json()
     assert.equal(out.error.code, "content_filtered", "命中标识句时要给出能指路的错误码")
     assert.match(out.error.message, /QQ 群 451129479/, "要给出拿修复方法的入口")
-    assert.match(out.error.message, /非密钥或登录问题/, "要纠正「API 密钥无效」这个误导")
+    assert.match(out.error.message, /不是密钥或登录问题/, "要纠正「API 密钥无效」这个误导")
   } finally {
     s.restore()
   }
@@ -301,7 +301,7 @@ test("任何 403「非法请求」都给 content_filtered —— 不再按指纹
     const out = await res.json()
     assert.equal(out.error?.code, "content_filtered", "普通 system prompt + 403 非法请求也要指路")
     assert.match(out.error.message, /QQ 群 451129479/)
-    assert.match(out.error.message, /非密钥或登录问题/)
+    assert.match(out.error.message, /不是密钥或登录问题/)
   } finally {
     s.restore()
   }
@@ -325,7 +325,7 @@ test("system prompt 里那句 DSH 标识会被自动改成 DeepSeek-Harness", as
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are an AI agent powered by DeepSeek-Harness.",
+      "You are an AI agent running in DeepSeek Harness.",
       "两个词之间要换成连字符（实测这样上游才放行）",
     )
     assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
@@ -538,8 +538,8 @@ test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节
 
 test("全小写 / 句末加感叹号的身份句照样会被拦，也照样要改写", async () => {
   const variants = [
-    ["you are an ai agent powered by deepseek harness.", "you are an ai agent powered by deepseek-harness."],
-    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent powered by DeepSeek-Harness!"],
+    ["you are an ai agent powered by deepseek harness.", "you are an ai agent running in deepseek harness."],
+    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent running in DeepSeek Harness!"],
   ]
   for (const [input, expected] of variants) {
     const s = stubFetch(() => upstreamOk())
