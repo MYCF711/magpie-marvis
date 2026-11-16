@@ -101,23 +101,31 @@ function isPrivateIp(ip) {
 async function assertPublicHttpUrl(parsed, lookupImpl) {
   if (parsed.username || parsed.password) fail("图片 URL 不允许携带账号信息，未发往 Marvis。")
   const host = parsed.hostname.replace(/^\[|\]$/g, "")
-  const ips = []
+
+  // 字面 IP：SSRF 面最大，一条都不放。
   if (isIP(host)) {
-    ips.push(host)
-  } else {
-    let records
-    try {
-      records = await lookupImpl(host, { all: true, verbatim: true })
-    } catch {
-      fail("图片域名无法解析，未发往 Marvis。")
-    }
-    for (const record of records || []) ips.push(record.address)
+    if (isPrivateIp(host)) fail("图片地址指向本机 / 内网 / 保留地址，已拦截，未发往 Marvis。")
+    return
   }
-  if (!ips.length) fail("图片域名没有可用解析结果，未发往 Marvis。")
-  // 应用层预检：字面 IP 与 DNS 解析结果全部须为公网地址。
+
+  let records
+  try {
+    records = await lookupImpl(host, { all: true, verbatim: true })
+  } catch {
+    fail("图片域名无法解析，未发往 Marvis。")
+  }
+  const resolved = records || []
+  if (!resolved.length) fail("图片域名没有可用解析结果，未发往 Marvis。")
+
+  // ⚠ 域名解析里**混进保留地址不整体拒**（issue #34）：开了 DNS 过滤 / sinkhole 的机器上，
+  //   同一域名常见「N 条公网 + 若干条 0.0.0.0」，逐条否决会把完全正常的外链图一起拦掉
+  //   （实测 cdn.jsdelivr.net → 3 条 Cloudflare IPv6 + 2 条 0.0.0.0，curl 走 IPv6 能取到图）。
+  //   只要**还有一条公网记录**就放行；一条不剩才拒。
+  //   字面 IP 那条分支仍然严格拒绝 —— SSRF 面没有变化。
   // 残余风险：严格防 DNS rebinding 需要连接层固定已校验地址，当前实现不覆盖，在此明示。
-  for (const ip of ips) {
-    if (isPrivateIp(ip)) fail("图片地址指向本机 / 内网 / 保留地址，已拦截，未发往 Marvis。")
+  const publicRecords = resolved.filter((record) => !isPrivateIp(record.address))
+  if (!publicRecords.length) {
+    fail("图片地址指向本机 / 内网 / 保留地址，已拦截，未发往 Marvis。")
   }
 }
 

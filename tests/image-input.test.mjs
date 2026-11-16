@@ -272,3 +272,43 @@ test("超过 20 MiB 的 data URI 同样被上限拦截", async () => {
     InvalidImageError,
   )
 })
+
+// issue #34：DNS 过滤 / sinkhole 会把同一域名解析成「N 条公网 + 若干条 0.0.0.0」。
+// 逐条否决会把完全正常的外链图一起拦掉，所以只在**一条公网记录都没有**时才拒。
+
+test("解析结果混进 0.0.0.0（DNS sinkhole）时放行 —— 只要还有一条公网记录", async () => {
+  const mixedLookup = async () => [
+    { address: "2606:4700::6810:84e5", family: 6 },
+    { address: "0.0.0.0", family: 4 },
+  ]
+  const calls = []
+  const messages = await normalizeMessages(
+    [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://cdn.example.com/a.png" } }] }],
+    async (url) => {
+      calls.push(url)
+      return new Response(Buffer.from(PNG, "base64"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      })
+    },
+    mixedLookup,
+  )
+  assert.equal(calls.length, 1, "有公网记录就该照常下载")
+  assert.equal(messages[0].content[0].image_url.url, DATA_URI)
+})
+
+test("解析结果全是保留地址时仍然拒（SSRF 面不变）", async () => {
+  const calls = []
+  await assert.rejects(
+    () => normalizeMessages(
+      [{ role: "user", content: [{ type: "image_url", image_url: { url: "https://example.com/a.png" } }] }],
+      async () => { calls.push(1); throw new Error("不应出网") },
+      async () => [
+        { address: "0.0.0.0", family: 4 },
+        { address: "127.0.0.1", family: 4 },
+      ],
+    ),
+    InvalidImageError,
+  )
+  assert.equal(calls.length, 0)
+})
