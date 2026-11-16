@@ -311,7 +311,7 @@ test("任何 403「非法请求」都给 content_filtered —— 不再按指纹
 // 自动改写：那句标识句换成 DeepSeek-Harness，用户不用动 DSH 配置
 // ─────────────────────────────────────────────────────────────
 
-test("system prompt 里那句 DSH 标识会被自动改成 DeepSeek-Harness", async () => {
+test("system prompt 里那句 DSH 标识会被整行换成中性身份句", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -325,8 +325,8 @@ test("system prompt 里那句 DSH 标识会被自动改成 DeepSeek-Harness", as
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are an AI agent powered by DeepSeek-Harness.",
-      "两个词之间要换成连字符（实测这样上游才放行）",
+      "You are an AI agent.",
+      "2026-11-16 复测：连字符形态也被拦，只能整行换掉",
     )
     assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
   } finally {
@@ -349,12 +349,12 @@ test("不涉及那句的 system prompt 原样发出", async () => {
   }
 })
 
-test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→ 插件一个字节都不改", async () => {
-  // 这是「门禁」而不是「无差别替换」的关键：只认会被拦的原始形态，用户的修复必须原样保留
+test("本来就放行的 system prompt（不点名任何 agent）→ 插件一个字节都不改", async () => {
+  // 这是「门禁」而不是「无差别替换」的关键：只认会被拦的身份声明，其它写法必须原样保留。
+  // ⚠ 连字符 / 破折号形态**不在**这个列表里了 —— 2026-11-16 复测它们同样 403。
   const alreadyFixed = [
-    "You are an AI agent powered by DeepSeek-Harness. Your working directory is /repo.",
-    "You are an AI agent powered by DeepSeek — Harness. Your working directory is /repo.",
     "You are a coding agent powered by the deepseek model.",
+    "You are a helpful assistant.",
   ]
   for (const text of alreadyFixed) {
     const s = stubFetch(() => upstreamOk())
@@ -379,7 +379,7 @@ test("用户已经在 DSH 侧修好（连字符 / 破折号 / 关掉整句）→
 // Claude Code 身份句的 403 诊断（issue #26，错误码 4100406）
 // ─────────────────────────────────────────────────────────────
 
-test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原始身份句", async () => {
+test("Claude Code 身份句 + 403 → 整行换成中性身份句，且诊断指回原始身份句", async () => {
   const s = stubFetch(() => upstreamError(403, { code: 4100406, msg: "非法请求" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -395,8 +395,8 @@ test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are Claude-Code, Anthropic's official CLI for Claude.",
-      "0.2.32 起会在本地把身份短语改写成连字符形态（改写后仍 403 时才走上面那条诊断）",
+      "You are an AI agent.",
+      "身份行整行换掉（连字符形态 2026-11-16 复测仍 403）",
     )
   } finally {
     s.restore()
@@ -410,7 +410,7 @@ test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原
 //   Claude 原句 → 403；`Claude-Code` → 200
 // ─────────────────────────────────────────────────────────────
 
-test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
+test("Codex Desktop 的身份句会被整行换成中性身份句", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -429,9 +429,8 @@ test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant. " +
-        "Codex CLI is an open source project led by OpenAI.",
-      "只改开头身份短语里的那个空格，后面的 `Codex CLI` 原样保留",
+      "You are an AI agent.",
+      "整行换掉：连字符形态 Codex-CLI 也被拦",
     )
     assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
   } finally {
@@ -439,7 +438,7 @@ test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
   }
 })
 
-test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () => {
+test("Claude Desktop 的身份句会被整行换成中性身份句", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -457,8 +456,8 @@ test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () =>
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
-      "只改 `Claude Code` 这一处，第二处 `Claude` 不动",
+      "You are an AI agent.",
+      "整行换掉：Claude-Code 形态同样 403",
     )
     assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
   } finally {
@@ -466,12 +465,13 @@ test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () =>
   }
 })
 
-test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", async () => {
-  const alreadyFixed = [
+test("客户端已经写成 Codex-CLI / Claude-Code → 仍然会被整行换掉", async () => {
+  // 2026-11-16 复测：这两种「历史修复形态」也被上游拦了，不能再当已修好放行
+  const stillBlocked = [
     "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant.",
     "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
   ]
-  for (const text of alreadyFixed) {
+  for (const text of stillBlocked) {
     const s = stubFetch(() => upstreamOk())
     try {
       const req = requestFor("deepseek-v4-1-flash-261017")
@@ -480,7 +480,7 @@ test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", 
       req.init.body = JSON.stringify(body)
       await (await loaderOf()).fetch(req.url, req.init)
       const sent = JSON.parse(s.calls[0].init.body)
-      assert.equal(sent.messages[0].content, text, `已经修过的形态不许再动：${text.slice(0, 42)}…`)
+      assert.equal(sent.messages[0].content, "You are an AI agent.", `连字符形态也要换掉：${text.slice(0, 42)}…`)
     } finally {
       s.restore()
     }
@@ -506,7 +506,7 @@ test("中文身份句写在 system 首行 → 自动改写，且 403 改判成 c
     req.init.body = JSON.stringify(body)
     const res = await (await loaderOf()).fetch(req.url, req.init)
     const sent = JSON.parse(s.calls[0].init.body)
-    assert.equal(sent.messages[0].content, "你是一个由 DeepSeek-Harness 驱动的 AI 智能体。", "中文写法同样要把词间空格换成连字符")
+    assert.equal(sent.messages[0].content, "You are an AI agent.", "中文写法同样整行换掉")
     assert.equal(res.status, 403)
     assert.equal((await res.json()).error.code, "content_filtered", "中文写法不许退化成原始 403")
   } finally {
@@ -538,8 +538,8 @@ test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节
 
 test("全小写 / 句末加感叹号的身份句照样会被拦，也照样要改写", async () => {
   const variants = [
-    ["you are an ai agent powered by deepseek harness.", "you are an ai agent powered by deepseek-harness."],
-    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent powered by DeepSeek-Harness!"],
+    ["you are an ai agent powered by deepseek harness.", "You are an AI agent."],
+    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent."],
   ]
   for (const [input, expected] of variants) {
     const s = stubFetch(() => upstreamOk())

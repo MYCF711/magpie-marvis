@@ -3,6 +3,24 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.38 — 2026-11-16
+
+**修复（身份首行：连字符形态失效 + system 数组漏改）**
+
+- 2026-11-16 复测：0.2.32 起用的「词间换连字符」写法**已被上游一起拦掉** ——
+  `DeepSeek-Harness` / `Claude-Code` / `Codex-CLI` 三种形态直打上游全部 403，
+  `You are Claude.` 也 403；只有 `You are an AI agent.` 这种中性句 200
+- 改成**整行换掉**：命中身份声明的首行替换为 `You are an AI agent.`，行内其余内容与
+  其它消息（user / assistant / tool）一个字节都不动
+- 补两个漏掉的承载：`messages[role=system].content` 的**文本块数组**，以及
+  Anthropic Messages 的 `system` 字段（字符串 / 文本块数组 / 单块对象）。
+  现场：Claude Desktop 经网关转成 chat completions 时身份句在数组里，旧版只认字符串，带着原句出网 → 403
+- 新增供应商开关 `hide_dsh`（默认开启）：关掉后**请求与未安装本插件时完全一致**，
+  便于对照与回退；`magpie plugin options magpie-marvis@latest '{"hide_dsh":false}'`
+- 用例：新增 `tests/identity-rewrite.test.mjs`（7 项：三种 system 形状 / 只动首行 /
+  非 system 角色不动 / 开关关掉零改动 / 默认开启）；既有 8 项身份用例按新判据更新
+- 验收：测试 169 项中 165 通过、4 项因未注入 live 凭据跳过
+
 ## 0.2.37 — 2026-11-16
 
 **修复（URL 图片：DNS 里混一条 0.0.0.0 就把整个域名拒掉）**

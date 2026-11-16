@@ -16,6 +16,12 @@ export const PROVIDER = "marvis"
 /** 卡片上显示的供应商名：必须 <中文> <English> */
 export const PROVIDER_NAME = "腾讯 Marvis TENCENT"
 
+/**
+ * 供应商开关：隐去会被上游内容过滤拦下的身份首行（DSH / Claude / Codex）。
+ * 默认开启；关掉即请求原样发出（等同未安装本插件）。
+ */
+export const HIDE_DSH = "hide_dsh"
+
 /** 业务接口基址（/v3/*：用户信息、钱包） */
 export const BASE = "https://yybadaccess.3g.qq.com"
 /** 推理 API 基址 —— loader 的 baseURL，SDK 会拼成 <baseURL>/chat/completions */

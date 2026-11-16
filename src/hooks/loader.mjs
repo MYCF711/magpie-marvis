@@ -9,7 +9,7 @@
 // ⚠ 实测：把 UAL 签名头（md5 body+ts+accessKey+nonce）加到模型网关上是**错的** ——
 //   会从 403 风控变成 401 登录态过期。那套只用于 /v3/*。
 
-import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, canonicalModelId, isUnavailableModel } from "../context.mjs"
+import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, HIDE_DSH, PROVIDER, canonicalModelId, isUnavailableModel } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
 import { normalizeTools } from "../marvis/tool-schema.mjs"
 import { InvalidImageError, normalizeMessages } from "../marvis/images.mjs"
@@ -47,16 +47,34 @@ const AUTH_EXPIRED = /4100403|登录态过期|未登录/
  *   它们照样 403，而且因为不命中模板，连 content_filtered 诊断都不会触发，
  *   用户看到的仍是宿主那句「API 密钥无效」。
  */
+const IDENTITY_REPLACEMENT = "You are an AI agent."
+
+/**
+ * ⚠ 2026-11-16 复测：**连字符形态已被上游一起拦掉**。
+ *
+ *   0.2.32 起把词间空格换成连字符（`DeepSeek-Harness` / `Claude-Code` / `Codex-CLI`），
+ *   当天实测确实 200；2026-11-16 用同样的请求复测，三种形态**全部 403**：
+ *
+ *     You are an AI agent powered by DeepSeek-Harness.        → 403
+ *     You are Claude-Code, Anthropic's official CLI …          → 403
+ *     You are a coding agent running in the Codex-CLI, …       → 403
+ *     You are Claude Code, Anthropic's official CLI for Claude. → 403
+ *     You are Claude.                                          → 403
+ *     You are an AI agent.                                     → 200
+ *
+ *   ⇒ 判据是「首行里的身份声明本身」，不是「词间那一个空格」。
+ *   所以这里改成**整行换掉**，不再做字形替换；行内其余内容与其它消息一个字节都不动。
+ */
 const IDENTITY_PHRASES = [
-  [/(You are an AI agent powered by DeepSeek)\s+(Harness)/i, "$1-$2"],
-  [/(You are a coding agent running in the Codex)\s+(CLI)/i, "$1-$2"],
-  [/(You are Claude)\s+(Code, Anthropic's official CLI for Claude)/i, "$1-$2"],
-  [/(你是一个由\s*DeepSeek)\s+(Harness)/i, "$1-$2"],
+  /^You are Claude\b/i,
+  /^You are a coding agent running in the Codex\b/i,
+  /^You are an AI agent,?\s+powered by\s+DeepSeek\b/i,
+  /^你是一个由\s*DeepSeek\b/i,
 ]
 
 /** 判定用（只看原文，不参与改写）：命中任一条即认为这次 403 是内容过滤 */
 const IDENTITY_PHRASE_TEST =
-  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent running in the Codex\s+CLI|You are Claude\s+Code|你是一个由\s*DeepSeek\s+Harness/i
+  /^You are Claude\b|^You are a coding agent running in the Codex\b|^You are an AI agent,?\s+powered by\s+DeepSeek\b|^你是一个由\s*DeepSeek\b/im
 
 /**
  * 上游内容过滤拦截时的**统一**提示。
@@ -83,30 +101,66 @@ function errorResponse(status, code, message, headers = {}) {
 }
 
 /**
- * 把会被上游内容过滤拦下的身份句改写成能放行的形态。
+ * 把会被上游内容过滤拦下的身份句换掉。
  *
- * ⚠ 只改 system 消息**第一行**里的身份短语 —— 那是上游唯一会拦的位置；
- *   user / assistant 里的同一句上游本来就放行，改了反而是多余改动。
- * ⚠ 门禁不变：只把词间那一个空格换成连字符，其余字符一个都不碰；
- *   已经写成连字符 / 破折号的形态没有空格可换，仍然原样发出（0.2.30 的用例继续守着）。
- * ⚠ 返回**新数组**才表示改过 —— 调用方据此决定要不要重新序列化 body（并去掉 content-length）。
- *
- * @param {unknown} messages
- * @returns {unknown}
+ * ⚠ 只动 **system 级文本的第一行** —— 那是上游唯一会拦的位置；
+ *   user / assistant / tool_result 里的同一句上游本来就放行，改了反而是多余改动。
+ * ⚠ 整行换成 `You are an AI agent.`：**不再做词间替换**（连字符形态已被上游一起拦掉，
+ *   见上方 IDENTITY_PHRASES 的实测记录）。行内其余内容、其它消息一律一个字节都不动。
+ * ⚠ 两种 system 承载都要覆盖：chat completions 的 `messages[].content`，
+ *   以及 Anthropic Messages 的 `system`（字符串 / 文本块数组 / 单块对象）。
+ *   2026-11-16 现场：Claude Desktop 经网关转成 chat completions 时，
+ *   身份句落在 `messages[role=system].content` 的**数组**里，旧版只认字符串，于是漏改。
+ * ⚠ 返回**新值**才表示改过 —— 调用方据此决定要不要重新序列化 body（并去掉 content-length）。
  */
 function firstLineOf(text) {
   const cut = text.indexOf("\n")
   return cut < 0 ? text : text.slice(0, cut)
 }
 
-/** 首行里的身份短语换成连字符形态；没有可换的就原样返回 */
+/** 首行是不是被拦的身份声明；是就整行换掉，不是就原样返回 */
 function rewriteFirstLine(text) {
+  if (typeof text !== "string" || text.length === 0) return text
   const line = firstLineOf(text)
-  let next = line
-  for (const [pattern, replacement] of IDENTITY_PHRASES) {
-    next = next.replace(pattern, replacement)
+  const lead = /^[\uFEFF \t]*/.exec(line)?.[0] ?? ""
+  const body = line.slice(lead.length)
+  if (!IDENTITY_PHRASES.some((pattern) => pattern.test(body))) return text
+  const next = lead + IDENTITY_REPLACEMENT
+  if (next === line) return text
+  return next + text.slice(line.length)
+}
+
+/** 文本、文本块、文本块数组 —— 三种 system 内容形状都按同一规则处理 */
+function rewriteTextContent(content) {
+  if (typeof content === "string") return rewriteFirstLine(content)
+  if (!Array.isArray(content)) {
+    if (content && typeof content === "object" && typeof content.text === "string") {
+      const text = rewriteFirstLine(content.text)
+      return text === content.text ? content : { ...content, text }
+    }
+    return content
   }
-  return next === line ? text : next + text.slice(line.length)
+  let touched = false
+  const out = content.map((block) => {
+    if (!block || typeof block !== "object" || typeof block.text !== "string") return block
+    const text = rewriteFirstLine(block.text)
+    if (text === block.text) return block
+    touched = true
+    return { ...block, text }
+  })
+  return touched ? out : content
+}
+
+/** 取一段 system 内容的首个文本（字符串 / 文本块数组 / 单块对象），用于判定 */
+function blockTextOf(content) {
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) {
+    return content && typeof content === "object" && typeof content.text === "string" ? content.text : ""
+  }
+  for (const block of content) {
+    if (block && typeof block === "object" && typeof block.text === "string" && block.text.trim()) return block.text
+  }
+  return ""
 }
 
 function rewriteAgentIdentity(messages) {
@@ -114,9 +168,8 @@ function rewriteAgentIdentity(messages) {
   let touched = false
   const out = messages.map((message) => {
     if (!message || typeof message !== "object") return message
-    if (message.role !== "system") return message
-    if (typeof message.content !== "string") return message
-    const content = rewriteFirstLine(message.content)
+    if (message.role !== "system" && message.role !== "developer") return message
+    const content = rewriteTextContent(message.content)
     if (content === message.content) return message
     touched = true
     return { ...message, content }
@@ -141,10 +194,13 @@ function identityBlockedInSystem(bodyString) {
   }
   const messages = Array.isArray(json?.messages) ? json.messages : []
   for (const message of messages) {
-    if (!message || message.role !== "system") continue
-    const text = typeof message.content === "string" ? message.content : ""
-    if (IDENTITY_PHRASE_TEST.test(firstLineOf(text))) return true
+    if (!message || (message.role !== "system" && message.role !== "developer")) continue
+    const text = blockTextOf(message.content)
+    if (text && IDENTITY_PHRASE_TEST.test(firstLineOf(text))) return true
   }
+  // Anthropic Messages 形状：身份句可能在 system 里（字符串 / 文本块数组）
+  const system = blockTextOf(json?.system)
+  if (system && IDENTITY_PHRASE_TEST.test(firstLineOf(system))) return true
   return false
 }
 
@@ -191,7 +247,9 @@ function credsOf(auth) {
   }
 }
 
-export function loaderHook() {
+export function loaderHook(input) {
+  // 开关：默认开启。关掉 = 请求原样发出，等同未安装本插件时的行为。
+  const hideIdentity = () => input?.magpie?.option?.(PROVIDER, HIDE_DSH) !== false
   return async (getAuth) => {
     const auth = await getAuth()
     const creds = credsOf(auth)
@@ -280,12 +338,20 @@ export function loaderHook() {
                 }
                 throw err
               }
-              // ⚠ 上游内容过滤会精确拦下 DSH / Codex / Claude Desktop 的身份句
-              //   （issue #22 实测：身份短语中间换成连字符就放行）。自动改写，用户不用改客户端配置。
-              const rewritten = rewriteAgentIdentity(json.messages)
-              if (rewritten !== json.messages) {
-                json.messages = rewritten
-                changed = true
+              // ⚠ 上游内容过滤会精确拦下 DSH / Codex / Claude Desktop / Claude Code 的身份首行
+              //   （issue #22 / #26；2026-11-16 复测：连字符形态也一起拦了）。自动改写，
+              //   用户不用改客户端配置；关掉 hide_dsh 开关则一个字节都不动。
+              if (hideIdentity()) {
+                const rewritten = rewriteAgentIdentity(json.messages)
+                if (rewritten !== json.messages) {
+                  json.messages = rewritten
+                  changed = true
+                }
+                const system = rewriteTextContent(json.system)
+                if (system !== json.system) {
+                  json.system = system
+                  changed = true
+                }
               }
             }
             if (changed) {

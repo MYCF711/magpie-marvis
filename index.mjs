@@ -25,10 +25,10 @@ import { authHooks } from "./src/auth.mjs"
 import { modelsHook } from "./src/hooks/models.mjs"
 import { PROVIDER, PROVIDER_NAME, BASE_V1, staticModels, providerModels, DEFAULT_MODEL } from "./src/context.mjs"
 
-export const MarvisAuthPlugin = async (_input) => {
+export const MarvisAuthPlugin = async (input) => {
   return {
     config: configHook(),
-    auth: authHooks(),
+    auth: authHooks(input),
 
     provider: {
       id: PROVIDER,
