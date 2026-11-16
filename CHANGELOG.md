@@ -3,6 +3,16 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.36 — 2026-11-16
+
+**修复（`deepseek-v4-pro-external` 漏了识图能力声明）**
+
+- 该槽位上游回的是 `deepseek-v4-1-flash-261017`，与 `main-auto` 同一个模型；0.2.26 给 `main-auto`
+  补了 `vision: true`，这条漏了 —— 结果选中它时 `attachment` / `modalities.input` 全为假，传不了图
+  （贡献：@xxhhlk，PR #32）
+- 作者实测：两个槽位对同一张带字 PNG 都读出 `MAGPIE-VISION-TEST 42`
+- 验收：测试 160 项中 156 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.35 — 2026-11-15
 
 **修复（403 一律指引到群，不再按指纹判定）**
