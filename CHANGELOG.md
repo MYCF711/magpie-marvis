@@ -3,6 +3,22 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.40 — 2026-11-17
+
+**修复（Claude / Codex 的改写规则已经变成空转：产物照样 403）**
+
+- 2026-11-17 复测 0.2.32 起的连字符改写产物：`You are Claude-Code, …` /
+  `You are a coding agent running in the Codex-CLI, …` **仍然 403** —— 规则在跑，
+  改完上游照样拦，用户看到的现象和没装插件一样（issue #36 / #41 的表里都记着）
+- 上游认的是**第一句的形状**：`You are <产品名>` 当主语就拦，插字符不管用；**拆主语**才放行。
+  实测（同一分钟、只换 system 首行）：`You are a coding agent, running in the Codex CLI, …` → 200、
+  `You are an agent, Claude Code, …` → 200、`You are an agent, Claude-Code, …` → 200、
+  `You are an agent, Claude.` → 200
+- 改写改成「插一个逗号 + 泛指名词」：**名字一个字符都不删**，模型仍然知道自己是哪个客户端；
+  老形态（`Codex-CLI` / `Claude-Code` / 裸 `You are Claude.`）继续被救回来
+- 新增 2 个用例（老形态救回 / 幂等），改写产物与用例期望一起更新
+- 验收：测试 166 项中 162 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.39 — 2026-11-17
 
 **修复（ZCode 的身份句没被覆盖，整个客户端 403）**

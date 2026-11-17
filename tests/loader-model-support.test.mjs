@@ -395,8 +395,8 @@ test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are Claude-Code, Anthropic's official CLI for Claude.",
-      "0.2.32 起会在本地把身份短语改写成连字符形态（改写后仍 403 时才走上面那条诊断）",
+      "You are an agent, Claude Code, Anthropic's official CLI for Claude.",
+      "2026-11-17 起改成「拆主语」：插 `an agent, ` 让第一句不再是 `You are <产品名>`",
     )
   } finally {
     s.restore()
@@ -405,12 +405,20 @@ test("Claude Code 身份句 + 403 → 改写成 Claude-Code，且诊断指回原
 
 // ─────────────────────────────────────────────────────────────
 // 同一类内容过滤：Codex Desktop / Claude Desktop 的身份句
+//
 // 2026-11-15 直打上游实测（只换 system prompt 第一句，其余完全一样）：
 //   Codex 原句 → 403；`Codex-CLI` → 200
 //   Claude 原句 → 403；`Claude-Code` → 200
+//
+// ⚠ 2026-11-17 **复测：连字符形态失效了**（`Codex-CLI` / `Claude-Code` 都是 403，
+//   见 issue #36 的表）。上游认的是**第一句的形状** —— `You are <产品名>` 当主语就拦，
+//   插什么字符都不管用；**拆主语**才放行：
+//     `You are a coding agent, running in the Codex CLI, …` → 200
+//     `You are an agent, Claude Code, …` → 200（`Claude-Code` / 裸 `You are Claude.` 同样 200）
+//   所以改写改成「插一个逗号 + 泛指名词」，名字一个字符都不删。
 // ─────────────────────────────────────────────────────────────
 
-test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
+test("Codex Desktop 的身份句会被拆主语（插逗号），名字原样保留", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -429,9 +437,9 @@ test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant. " +
+      "You are a coding agent, running in the Codex CLI, a terminal-based coding assistant. " +
         "Codex CLI is an open source project led by OpenAI.",
-      "只改开头身份短语里的那个空格，后面的 `Codex CLI` 原样保留",
+      "只在 `agent` 后面插一个逗号，`Codex CLI` 与后面的句子一个字符都不动",
     )
     assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
   } finally {
@@ -439,7 +447,7 @@ test("Codex Desktop 的身份句会被自动改写成 Codex-CLI", async () => {
   }
 })
 
-test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () => {
+test("Claude Desktop 的身份句会被拆主语（插 `an agent, `），名字原样保留", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -457,8 +465,8 @@ test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () =>
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(
       sent.messages[0].content,
-      "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
-      "只改 `Claude Code` 这一处，第二处 `Claude` 不动",
+      "You are an agent, Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+      "只在 `You are ` 后面插 `an agent, `，`Claude Code` 与后面整句一个字符都不动",
     )
     assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
   } finally {
@@ -466,10 +474,42 @@ test("Claude Desktop 的身份句会被自动改写成 Claude-Code", async () =>
   }
 })
 
-test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", async () => {
+test("已经写成连字符老形态的（Codex-CLI / Claude-Code）也要被救回来", async () => {
+  // 0.2.32–0.2.39 的改写产物就是这两个形态，2026-11-17 实测它们**同样 403**。
+  // 用户可能已经按旧建议手改过自己的 prompt，所以老形态必须继续被（更彻底地）改写。
+  const cases = [
+    [
+      "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant.",
+      "You are a coding agent, running in the Codex-CLI, a terminal-based coding assistant.",
+    ],
+    [
+      "You are Claude-Code, Anthropic's official CLI for Claude.",
+      "You are an agent, Claude-Code, Anthropic's official CLI for Claude.",
+    ],
+    ["You are Claude.", "You are an agent, Claude."],
+  ]
+  for (const [input, expected] of cases) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: input }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, expected)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("已经改成「拆主语」形态的请求 → 一个字节都不改（幂等）", async () => {
   const alreadyFixed = [
-    "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant.",
-    "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+    "You are a coding agent, running in the Codex CLI, a terminal-based coding assistant.",
+    "You are a coding agent, running in the Codex-CLI, a terminal-based coding assistant.",
+    "You are an agent, Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+    "You are an agent, Claude-Code, Anthropic's official CLI for Claude.",
     "You are Z-Code, an interactive agent working with the user toward their goals.",
   ]
   for (const text of alreadyFixed) {
