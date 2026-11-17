@@ -163,6 +163,16 @@ export const MODEL_ALIASES = Object.freeze(
  * （模型列表）上**（0.2.47 / 0.2.48 实测，两张截图）。插件的渲染自己改不了，能改的只有
  * 「让每条只占一行」—— 所以说明写进 `label`（≤60 字符），`description` 一律留空。
  */
+/**
+ * 插件选项里的那个键：**就是给用户看的字段名**，所以用中文。
+ *
+ * 设置 → 插件 → 本插件那一行的「选项」框里，用户看到的就是
+ * `{ "提示词首行替换": "You are a helpful assistant." }`。
+ * 键名是我们自己定的（magpie 只要求值是一个对象），随时能改；改成中文以后
+ * 不用猜 `text` 是什么意思。老版本存过的 `text` / `firstLine.text` 仍然读。
+ */
+export const FIRST_LINE_OPTION_KEY = "提示词首行替换"
+
 export const PLUGIN_OPTIONS = Object.freeze([
   Object.freeze({
     key: "first_line_fallback",
