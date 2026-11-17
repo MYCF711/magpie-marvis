@@ -144,6 +144,46 @@ export const MODEL_ALIASES = Object.freeze(
 )
 
 /**
+ * provider 卡片里的开关（magpie 的 `auth.options`，#2038）。
+ *
+ * magpie 把每条渲染成一行 Off/On 开关，放在供应商编辑器里（和账号、路由、模型同一张卡），
+ * 用户点一下立刻保存；插件用 `input.magpie.option("marvis", key)` 读，
+ * **改完不用重启、下一个请求就生效**。
+ *
+ * 字段约束（magpie 侧强校验，写错就整条被丢）：`key` 必须 `[a-z0-9_-]{1,40}` 且唯一；
+ * `label` ≤60 字符；`description` ≤300；`labels` / `descriptions` / `confirms` 是多语言版本
+ * （`{"zh": "…"}`），`label` 本身必须留着，老版本 magpie 只读它。最多 16 条。
+ */
+export const PLUGIN_OPTIONS = Object.freeze([
+  Object.freeze({
+    key: "first_line_fallback",
+    label: "Rewrite the first line when the upstream refuses it",
+    labels: { zh: "被上游拒绝时改写首行", "zh-TW": "被上游拒絕時改寫首行" },
+    description:
+      "A request refused as a content-filter hit (403 非法请求) is sent once more with its system first line replaced. Healthy requests are not touched.",
+    descriptions: {
+      zh: "被上游按内容过滤拦下（403 非法请求）的请求，会把 system 首行换成兜底句再发一次；正常请求一个字节都不改。",
+    },
+    default: true,
+  }),
+  Object.freeze({
+    key: "first_line_always",
+    label: "Rewrite the first line of every request",
+    labels: { zh: "每个请求都改写首行" },
+    description:
+      "Every request gets its system first line replaced by the one in the plugin's options (or the built-in fallback). Use it for clients whose prompt cannot be changed at all.",
+    descriptions: {
+      zh: "每个请求都把 system 首行换成插件选项里那句（留空 = 内置 You are a helpful assistant.）。用于提示词根本改不了的客户端。",
+    },
+    default: false,
+    confirm: "Every request will have its system prompt's first line replaced, including the ones that would work as they are.",
+    confirms: {
+      zh: "之后每个请求的 system 首行都会被换掉，包括本来能正常通过的那些。",
+    },
+  }),
+])
+
+/**
  * 槽位「应该」服务哪个上游模型名 —— 自查探针与测试共用。
  *
  * ⚠ 不能直接拿 `DISPLAY_BY_SLOT` 比：显示名里有**我们加的后缀**
