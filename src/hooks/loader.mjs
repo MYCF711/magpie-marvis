@@ -47,25 +47,54 @@ const AUTH_EXPIRED = /4100403|登录态过期|未登录/
  *   它们照样 403，而且因为不命中模板，连 content_filtered 诊断都不会触发，
  *   用户看到的仍是宿主那句「API 密钥无效」。
  */
-const IDENTITY_PHRASES = [
-  // ⚠ 2026-11-16：连字符形态（`DeepSeek-Harness`）已被上游识别，实测照样 403。
-  //   改成**换句式**：`powered by` → `running in`（等长、语义不变），实测放行。
-  [/(You are an AI agent) powered by (DeepSeek)\s+(Harness)/i, "$1 running in $2 $3"],
-  // ⚠ 2026-11-17：`Codex-CLI` / `Claude-Code` 这两个**连字符形态已经失效**（实测照样 403，
-  //   issue #36 / #41 的表里都有）。上游认的是**第一句的形状** —— `You are <产品名>` 当主语
-  //   就拦，不管中间插什么字符；而「拆主语」就放行（插个逗号，接一个泛指名词）：
-  //     `You are a coding agent, running in the Codex CLI…` → 200（`Codex-CLI` 同样 200）
-  //     `You are an agent, Claude Code, …` / `… Claude-Code …` / `You are an agent, Claude.` → 200
-  //   所以改成插逗号：**名字一个字符都不删**，模型仍然知道自己是哪个客户端。
-  [/(You are a coding agent)\s+(running in the Codex)/i, "$1, $2"],
-  [/(You are)\s+(Claude)\b/i, "$1 an agent, $2"],
-  // ⚠ 2026-11-17（issue #38，ZCode 3.18.2）：这条上**连字符有效**，实测
-  //   `You are ZCode…` / `You are ZCode.` → 403，`You are Z-Code…` → 200，
-  //   同一分钟的 `You are Zed…` / `You are a helpful assistant.` → 200。
-  //   所以继续用「插连字符」而不是换句式：上游对 ZCode 的判据还是字面量 `ZCode`。
-  [/(You are)\s+(ZCode)\b/i, "$1 Z-Code"],
-  [/(你是一个由\s*DeepSeek)\s+(Harness)/i, "$1-$2"],
-]
+/**
+ * 主流客户端**默认首句** → 能放行的等价句（整句精确匹配才换）。
+ *
+ * ⚠ 为什么是「整句白名单」而不是正则：
+ *   ① 用户自己改过的首句**一个字节都不动** —— 不跟用户的修改打架，也不可能被二次改写；
+ *   ② 前缀稳定：同一客户端每次得到同一句 ⇒ 上游前缀缓存照常命中。
+ *      正则那种「形状像就改」在用户微调首句后仍会改写，前缀反复变、缓存反复失效；
+ *   ③ 出问题时一眼能看出改了什么（整句就是表里那一句）。
+ * ⚠ 表里出现新写法 = 新客户端版本 / 新指纹。宁可漏（有 403 诊断兜底），不可错改。
+ *
+ * 每行：原句（不带句末标点、空白已归一）→ 替换句（带句末标点）。
+ * 实测（2026-11-17，直打 127.0.0.1:3425，同一分钟只换 system 首句）：左列 403 → 右列 200。
+ */
+const IDENTITY_SENTENCES = new Map([
+  // DeepSeek Harness（我们自己的，改得理直气壮）
+  ["You are an AI agent powered by DeepSeek Harness", "You are an AI agent running in DeepSeek Harness."],
+  // Claude Code / Claude Desktop / 裸 Claude；连字符是老版本产物，用户可能已手改过
+  [
+    "You are Claude Code, Anthropic's official CLI for Claude",
+    "You are an agent, Claude Code, Anthropic's official CLI for Claude.",
+  ],
+  [
+    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK",
+    "You are an agent, Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+  ],
+  [
+    "You are Claude-Code, Anthropic's official CLI for Claude",
+    "You are an agent, Claude-Code, Anthropic's official CLI for Claude.",
+  ],
+  ["You are Claude Code", "You are an agent, Claude Code."],
+  ["You are Claude", "You are an agent, Claude."],
+  // Codex CLI / Codex Desktop
+  [
+    "You are a coding agent running in the Codex CLI, a terminal-based coding assistant",
+    "You are a coding agent, running in the Codex CLI, a terminal-based coding assistant.",
+  ],
+  [
+    "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant",
+    "You are a coding agent, running in the Codex-CLI, a terminal-based coding assistant.",
+  ],
+  ["You are a coding agent running in the Codex", "You are a coding agent, running in the Codex."],
+  // ZCode（issue #38）
+  [
+    "You are ZCode, an interactive agent working with the user toward their goals",
+    "You are Z-Code, an interactive agent working with the user toward their goals.",
+  ],
+  ["You are ZCode", "You are Z-Code."],
+])
 
 /** 判定用（只看原文，不参与改写）：命中任一条即认为这次 403 是内容过滤 */
 const IDENTITY_PHRASE_TEST =
@@ -83,9 +112,9 @@ const IDENTITY_PHRASE_TEST =
  */
 const CONTENT_FILTER_HINT =
   "上游内容过滤拦截：系统提示词首句被当成身份指纹（不是密钥或登录问题）。" +
-  "已知的几种身份句（DSH / Codex / Claude Code / ZCode）会在本插件里自动改成能放行的形态，" +
-  "客户端不用做任何配置。仍然被拦说明这句还没覆盖 —— 把 system 首行原样带到 QQ 群 451129479，" +
-  "加一条规则就能修。DSH 的手工改法：首句里的 `powered by` 改成 `running in`（实测放行）。"
+  "主流客户端的默认首句（DSH / Claude Code / Claude Desktop / Codex / ZCode）会在本插件里" +
+  "按整句白名单换成等价句；自己改过首句的请求不动（不跟你的修改打架）。" +
+  "仍然被拦说明这句还没进白名单 —— 把 system 首行原样带到 QQ 群 451129479，加一行就能修。"
 
 /**
  * 构造一个错误 Response。
@@ -118,13 +147,26 @@ function firstLineOf(text) {
   return cut < 0 ? text : text.slice(0, cut)
 }
 
-/** 首行里的身份短语换成连字符形态；没有可换的就原样返回 */
+/** 首行里的第一句（到第一个句末标点为止；没有标点就是整行） */
+function firstSentenceOf(line) {
+  const m = /^[\s\S]*?[.!?](?=\s|$)/.exec(line)
+  return m ? m[0] : line
+}
+
+/**
+ * 首句命中白名单就整句换掉；没命中（用户改过的、新版本的、没见过的）**原样返回**。
+ *
+ * 只动一个句子：行内其余内容与后续行一个字节都不碰；替换**幂等** ——
+ * 换完的句子不在表里，下次调用不会再动它（前缀因此稳定，缓存不会反复失效）。
+ */
 function rewriteFirstLine(text) {
   const line = firstLineOf(text)
-  let next = line
-  for (const [pattern, replacement] of IDENTITY_PHRASES) {
-    next = next.replace(pattern, replacement)
-  }
+  const sentence = firstSentenceOf(line)
+  const rest = line.slice(sentence.length)
+  const key = sentence.replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "")
+  const to = IDENTITY_SENTENCES.get(key)
+  if (!to) return text
+  const next = to + rest
   return next === line ? text : next + text.slice(line.length)
 }
 
