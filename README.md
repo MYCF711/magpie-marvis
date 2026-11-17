@@ -128,8 +128,8 @@ magpie plugin add MYCF711/magpie-marvis
 自定义首行那句除了 JSON，还有一个**输入框**（`magpie.panels` 面板）。⚠ 面板清单是窗口启动时拉的：
 用命令行更新插件后要按 **Ctrl+R** 或关掉窗口重开，输入框才会出现；开关不受影响。
 
-> 想把这个输入框或开关**置顶**：插件侧做不到 —— 位置写死在 magpie 的 `app.js`
-> （开关插在「高级」之前、面板追加在编辑器末尾）。上游提案草稿在 `$DSH_HOME/outbox/MYCF711-magpie-options-top.md`。
+> 两个开关都带 `placement: "top"`，所以画在**账号下面、路由上面**（magpie #5269）。
+> 面板（输入框）没有位置字段，只能追加在编辑器末尾；想让它也置顶需要 magpie 上游支持。
 
 ## 你的号被降级了没有？跑一条命令
 

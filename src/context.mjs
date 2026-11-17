@@ -150,6 +150,10 @@ export const MODEL_ALIASES = Object.freeze(
  * 用户点一下立刻保存；插件用 `input.magpie.option("marvis", key)` 读，
  * **改完不用重启、下一个请求就生效**。
  *
+ * 位置：条目上写 `placement: "top"` 就会被画在**账号下面、路由上面**（magpie #5269）；
+ * 不写（或写别的）则排在模型之后、高级折叠之前。我们两条都放 top —— 这两个开关是这张卡上
+ * 唯一需要用户先看的设置，排在路由/模型之后基本等于找不到。
+ *
  * 字段约束（magpie 侧强校验，写错就整条被丢）：`key` 必须 `[a-z0-9_-]{1,40}` 且唯一；
  * `label` ≤60 字符；`description` ≤300；`labels` / `descriptions` / `confirms` 是多语言版本
  * （`{"zh": "…"}`），`label` 本身必须留着，老版本 magpie 只读它。最多 16 条。
@@ -165,6 +169,7 @@ export const PLUGIN_OPTIONS = Object.freeze([
       zh: "被上游按内容过滤拦下（403 非法请求）的请求，会把 system 首行换成兜底句再发一次；正常请求一个字节都不改。",
     },
     default: true,
+    placement: "top",
   }),
   Object.freeze({
     key: "first_line_always",
@@ -176,6 +181,7 @@ export const PLUGIN_OPTIONS = Object.freeze([
       zh: "每个请求都把 system 首行换成插件选项里那句（留空 = 内置 You are a helpful assistant.）。用于提示词根本改不了的客户端。",
     },
     default: false,
+    placement: "top",
     confirm: "Every request will have its system prompt's first line replaced, including the ones that would work as they are.",
     confirms: {
       zh: "之后每个请求的 system 首行都会被换掉，包括本来能正常通过的那些。",
