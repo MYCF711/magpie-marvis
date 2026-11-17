@@ -3,6 +3,18 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.47 — 2026-11-17
+
+**修复（开关没置顶：漏了 `placement: "top"`）**
+
+- 我上一版说「插件侧无法置顶」是**错的**：magpie 早就支持 `auth.options[i].placement: "top"`，
+  写了就画在**账号下面、路由上面**（magpie 仓库 issue 5269；渲染侧 `pluginOptionsField(sub, top)`
+  按 `o.placement === "top"` 分组，Go 侧字段 `json:"placement,omitempty"`）
+- 两条开关（`first_line_fallback` / `first_line_always`）都加上 `placement: "top"`
+- README 更正对应的错误说法；用例加一条断言「每条都必须 top」，防止以后新增开关漏掉
+- ⚠ 面板（首行文本输入框）**没有**位置字段，仍只能追加在编辑器末尾 —— 想让输入框也置顶需要上游支持
+- 验收：测试 185 项中 181 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.46 — 2026-11-17
 
 **新增（首行文本的输入框：供应商卡片里的面板）**

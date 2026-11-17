@@ -12,6 +12,7 @@
 //   · default 必须是布尔（`o.default === true` 才算开）
 //   · 多语言写在 labels / descriptions / confirms 里，label 本身必须留着（老版本只读它）
 //   · 最多 16 条
+//   · `placement: "top"` → 画在账号下面、路由上面（magpie #5269）；不写就排在模型之后
 
 import test from "node:test"
 import assert from "node:assert/strict"
@@ -60,6 +61,12 @@ test("中文用户看得懂：每个开关都有 zh 的 label 与 description", 
   for (const o of PLUGIN_OPTIONS) {
     assert.ok(o.labels?.zh, `${o.key} 缺 labels.zh`)
     assert.ok(o.descriptions?.zh, `${o.key} 缺 descriptions.zh`)
+  }
+})
+
+test("两个开关都要置顶（placement: \"top\"）—— 排在路由/模型之后等于找不到", () => {
+  for (const o of PLUGIN_OPTIONS) {
+    assert.equal(o.placement, "top", `${o.key} 缺 placement: "top"，会被画在模型之后`)
   }
 })
 
