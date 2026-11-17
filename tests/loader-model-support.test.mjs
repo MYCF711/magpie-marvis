@@ -323,11 +323,11 @@ test("不涉及那句的 system prompt 原样发出", async () => {
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
     const body = JSON.parse(req.init.body)
-    body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...body.messages]
+    body.messages = [{ role: "system", content: "You are an AI assistant." }, ...body.messages]
     req.init.body = JSON.stringify(body)
     await (await loaderOf()).fetch(req.url, req.init)
     const sent = JSON.parse(s.calls[0].init.body)
-    assert.equal(sent.messages[0].content, "You are a helpful assistant.")
+    assert.equal(sent.messages[0].content, "You are an AI assistant.")
   } finally {
     s.restore()
   }
@@ -431,7 +431,7 @@ test("用户自己改过的首句（不在白名单里）→ 一个字节都不�
 //   `You are ZCode, an interactive agent working with the user toward their goals.` → 403
 //   `You are ZCode.`                                                              → 403
 //   `You are Z-Code, an interactive agent working with the user toward their goals.` → 200
-//   `You are Zed, …` / `You are a helpful assistant.`                              → 200
+//   `You are Zed, …` / `You are an AI assistant.`                              → 200
 // ⇒ 判据仍是**字面量 `ZCode`**（连字符形态在有空格可换的这条上照样有效），
 //   与 0.2.38 那条「连字符失效、改成换句式」的 DSH 结论不是一回事，别把两条混成一条。
 // ⚠ ZCode 的系统提示词不可配置（issue #38 原话），用户侧没有可行修法 ——
@@ -441,7 +441,7 @@ test("用户自己改过的首句（不在白名单里）→ 一个字节都不�
 test("无关的首句（Zed / helpful assistant）不许被 ZCode 那条规则误伤", async () => {
   const unrelated = [
     "You are Zed, an interactive agent working with the user toward their goals.",
-    "You are a helpful assistant.",
+    "You are an AI assistant.",
   ]
   for (const text of unrelated) {
     const s = stubFetch(() => upstreamOk())
@@ -495,8 +495,8 @@ test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节
   const cases = [
     [{ role: "system", content: "你是一个助手。\n你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }, { role: "user", content: "ping" }],
     [{ role: "user", content: "你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }],
-    [{ role: "system", content: "You are a helpful assistant." }, { role: "assistant", content: "You are an AI agent powered by DeepSeek Harness." }, { role: "user", content: "ping" }],
-    [{ role: "system", content: "You are a helpful assistant.\nYou are ZCode, an interactive agent working with the user toward their goals." }, { role: "user", content: "ping" }],
+    [{ role: "system", content: "You are an AI assistant." }, { role: "assistant", content: "You are an AI agent powered by DeepSeek Harness." }, { role: "user", content: "ping" }],
+    [{ role: "system", content: "You are an AI assistant.\nYou are ZCode, an interactive agent working with the user toward their goals." }, { role: "user", content: "ping" }],
   ]
   for (const messages of cases) {
     const s = stubFetch(() => upstreamOk())
@@ -539,7 +539,7 @@ test("默认 blocked：403 后换兜底首行重试一次，第二次仍 403 才
     const retried = JSON.parse(s.calls[1].init.body)
     assert.equal(
       retried.messages[0].content,
-      "You are a helpful assistant.\nExtra line stays.",
+      "You are an AI assistant.\nExtra line stays.",
       "兜底句不含任何 agent 产品名；第二行原样保留",
     )
     assert.equal(res.status, 403)
@@ -566,7 +566,7 @@ test("默认 blocked：重试成功时直接把 200 交给宿主（用户看不�
     assert.equal(res.status, 200)
     assert.equal(s.calls.length, 2)
     const retried = JSON.parse(s.calls[1].init.body)
-    assert.equal(retried.messages[0].content, "You are a helpful assistant.", "自定义首句救不了时，换兜底句")
+    assert.equal(retried.messages[0].content, "You are an AI assistant.", "自定义首句救不了时，换兜底句")
   } finally {
     s.restore()
   }
@@ -594,7 +594,7 @@ test("403 时首行已经是用户那句 → 不重试（只打一次）", async
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
     const body = JSON.parse(req.init.body)
-    body.messages = [{ role: "system", content: "You are a helpful assistant." }, ...body.messages]
+    body.messages = [{ role: "system", content: "You are an AI assistant." }, ...body.messages]
     req.init.body = JSON.stringify(body)
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 403)
@@ -631,6 +631,87 @@ test("first_line_always 开着：每个请求的首行都被换成配置的那�
     assert.equal(s.calls.length, 1, "always 模式直接改，不需要先撞一次 403")
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(sent.messages[0].content, `${custom}\nSecond line stays.`)
+  } finally {
+    s.restore()
+  }
+})
+
+test("first_line_always 也覆盖 Anthropic 的顶层 system（字符串）", async () => {
+  // issue #62：/v1/messages 的 system 不在 messages[] 里，只看 messages 就等于空操作
+  const NL = String.fromCharCode(10)
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.system = "You are Claude Code, Anthropic's official CLI for Claude." + NL + "Second line stays."
+    req.init.body = JSON.stringify(body)
+    const custom = "You are an assistant that answers in Chinese."
+    await (await loaderOf({ "提示词首行替换": custom }, { first_line_always: true })).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.system, custom + NL + "Second line stays.", "顶层 system 的首行要换掉，第二行原样")
+  } finally {
+    s.restore()
+  }
+})
+
+test("顶层 system 是数据块时，只换第一个 text 块，其余块原样", async () => {
+  const NL = String.fromCharCode(10)
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.system = [
+      { type: "text", text: "You are Claude Code." + NL + "Second line stays.", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "A second block stays put." },
+    ]
+    req.init.body = JSON.stringify(body)
+    const custom = "You are an assistant that answers in Chinese."
+    await (await loaderOf({ "提示词首行替换": custom }, { first_line_always: true })).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.system[0].text, custom + NL + "Second line stays.")
+    assert.deepEqual(sent.system[0].cache_control, { type: "ephemeral" }, "块上的其它字段不许丢")
+    assert.equal(sent.system[1].text, "A second block stays put.")
+  } finally {
+    s.restore()
+  }
+})
+
+test("first_line_always 也覆盖 /v1/responses 的顶层 instructions", async () => {
+  const NL = String.fromCharCode(10)
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    delete body.messages
+    body.instructions = "You are Codex, based on GPT-5." + NL + "Second line stays."
+    body.input = "ping"
+    req.init.body = JSON.stringify(body)
+    const custom = "You are an assistant that answers in Chinese."
+    await (await loaderOf({ "提示词首行替换": custom }, { first_line_always: true })).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.instructions, custom + NL + "Second line stays.")
+  } finally {
+    s.restore()
+  }
+})
+
+test("403 兜底也认顶层 system：换掉首行重试一次", async () => {
+  let n = 0
+  const s = stubFetch(() => {
+    n += 1
+    return n === 1
+      ? upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" })
+      : upstreamOk()
+  })
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.system = "You are Claude Code.\nSecond line stays."
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 200, "第二次成功就把 200 交给宿主")
+    assert.equal(s.calls.length, 2)
+    assert.equal(JSON.parse(s.calls[1].init.body).system, "You are an AI assistant.\nSecond line stays.")
   } finally {
     s.restore()
   }
@@ -695,7 +776,7 @@ test("text 留空 / 选项形状不对 → 用内置兜底句，绝不让请求�
       req.init.body = JSON.stringify(body)
       const res = await (await loaderOf(options)).fetch(req.url, req.init)
       assert.equal(res.status, 200, `配置写错也要能跑：${JSON.stringify(options)}`)
-      assert.equal(JSON.parse(s.calls[1].init.body).messages[0].content, "You are a helpful assistant.")
+      assert.equal(JSON.parse(s.calls[1].init.body).messages[0].content, "You are an AI assistant.")
     } finally {
       s.restore()
     }
