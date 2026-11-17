@@ -157,29 +157,24 @@ export const MODEL_ALIASES = Object.freeze(
  * 字段约束（magpie 侧强校验，写错就整条被丢）：`key` 必须 `[a-z0-9_-]{1,40}` 且唯一；
  * `label` ≤60 字符；`description` ≤300；`labels` / `descriptions` / `confirms` 是多语言版本
  * （`{"zh": "…"}`），`label` 本身必须留着，老版本 magpie 只读它。最多 16 条。
+ *
+ * ⚠ **这里不写 `description`**：magpie 的 `.plugin-options`（`plugin-options` 是
+ * `display:flex` 的 `.stack`）只给每个选项留了一行的高度，多出来的那行会**压在下一个 field
+ * （模型列表）上**（0.2.47 / 0.2.48 实测，两张截图）。插件的渲染自己改不了，能改的只有
+ * 「让每条只占一行」—— 所以说明写进 `label`（≤60 字符），`description` 一律留空。
  */
 export const PLUGIN_OPTIONS = Object.freeze([
   Object.freeze({
     key: "first_line_fallback",
-    label: "Rewrite the first line when the upstream refuses it",
-    labels: { zh: "被上游拒绝时改写首行", "zh-TW": "被上游拒絕時改寫首行" },
-    description:
-      "Refused as a content-filter hit (403)? Resent once with its system first line rewritten; healthy requests untouched.",
-    descriptions: {
-      zh: "被上游内容过滤拦下（403）时，改写 system 首行再发一次；正常请求不动。",
-    },
+    label: "Rewrite the first line when the upstream refuses it (403)",
+    labels: { zh: "被上游拒绝时改写首行（403 内容过滤）", "zh-TW": "被上游拒絕時改寫首行（403 內容過濾）" },
     default: true,
     placement: "top",
   }),
   Object.freeze({
     key: "first_line_always",
     label: "Rewrite the first line of every request",
-    labels: { zh: "每个请求都改写首行" },
-    description:
-      "Every request's system first line is replaced by the text below. Empty = the built-in fallback.",
-    descriptions: {
-      zh: "每个请求的 system 首行都换掉，用下方面板里那句；留空 = 内置兜底句。",
-    },
+    labels: { zh: "每个请求都改写首行（文本在卡片底部「首行文本」里设）" },
     default: false,
     placement: "top",
     confirm: "Every request will have its system prompt's first line replaced, including the ones that would work as they are.",
