@@ -51,19 +51,25 @@ const IDENTITY_PHRASES = [
   // ⚠ 2026-11-16：连字符形态（`DeepSeek-Harness`）已被上游识别，实测照样 403。
   //   改成**换句式**：`powered by` → `running in`（等长、语义不变），实测放行。
   [/(You are an AI agent) powered by (DeepSeek)\s+(Harness)/i, "$1 running in $2 $3"],
-  [/(You are a coding agent running in the Codex)\s+(CLI)/i, "$1-$2"],
-  [/(You are Claude)\s+(Code, Anthropic's official CLI for Claude)/i, "$1-$2"],
-  // ⚠ 2026-11-17（issue #38，ZCode 3.18.2）：连字符在这条上**仍然有效**，实测
+  // ⚠ 2026-11-17：`Codex-CLI` / `Claude-Code` 这两个**连字符形态已经失效**（实测照样 403，
+  //   issue #36 / #41 的表里都有）。上游认的是**第一句的形状** —— `You are <产品名>` 当主语
+  //   就拦，不管中间插什么字符；而「拆主语」就放行（插个逗号，接一个泛指名词）：
+  //     `You are a coding agent, running in the Codex CLI…` → 200（`Codex-CLI` 同样 200）
+  //     `You are an agent, Claude Code, …` / `… Claude-Code …` / `You are an agent, Claude.` → 200
+  //   所以改成插逗号：**名字一个字符都不删**，模型仍然知道自己是哪个客户端。
+  [/(You are a coding agent)\s+(running in the Codex)/i, "$1, $2"],
+  [/(You are)\s+(Claude)\b/i, "$1 an agent, $2"],
+  // ⚠ 2026-11-17（issue #38，ZCode 3.18.2）：这条上**连字符有效**，实测
   //   `You are ZCode…` / `You are ZCode.` → 403，`You are Z-Code…` → 200，
   //   同一分钟的 `You are Zed…` / `You are a helpful assistant.` → 200。
-  //   所以这里继续用「插连字符」而不是换句式：上游对 ZCode 的判据还是字面量 `ZCode`。
+  //   所以继续用「插连字符」而不是换句式：上游对 ZCode 的判据还是字面量 `ZCode`。
   [/(You are)\s+(ZCode)\b/i, "$1 Z-Code"],
   [/(你是一个由\s*DeepSeek)\s+(Harness)/i, "$1-$2"],
 ]
 
 /** 判定用（只看原文，不参与改写）：命中任一条即认为这次 403 是内容过滤 */
 const IDENTITY_PHRASE_TEST =
-  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent running in the Codex\s+CLI|You are Claude\s+Code|You are\s+ZCode\b|你是一个由\s*DeepSeek\s+Harness/i
+  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent\s+running in the Codex|You are\s+Claude\b|You are\s+ZCode\b|你是一个由\s*DeepSeek\s+Harness/i
 
 /**
  * 上游内容过滤拦截时的**统一**提示（本插件自己的 403 文案，不发给上游）。
