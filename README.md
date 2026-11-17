@@ -121,7 +121,7 @@ magpie plugin add MYCF711/magpie-marvis
 写在哪：设置 → 插件 → 腾讯 Marvis 那一行的「选项」框（值必须是一个 JSON 对象）
 
 ```json
-{ "提示词首行替换": "You are an AI assistant." }
+{ "提示词首行替换": "You are Marvis, Tencent's AI assistant." }
 ```
 
 - 引号里那句就是会被写进 system 首行的文本；留空或删掉 = 内置兜底句
