@@ -89,6 +89,26 @@ const CONTENT_FILTER_HINT =
 /** 内置兜底首行：不含任何 agent 产品名（实测 200） */
 const FALLBACK_FIRST_LINE = "You are Marvis, Tencent's AI assistant."
 
+/**
+ * 403 随机首行池：命中上游内容过滤（403「非法请求」）时，逐个换这些通用首句重试，
+ * 排除已经试过的，尽量避开上游不断增长的黑名单 —— 只要池里还有一句没被拉黑就能救回来。
+ *
+ * 全部是泛指、不带产品名的句子（`You are <产品名>` 那种形状才是上游重点拦的）。
+ * 这不预测「哪句能过」，只是运行时逐句试，用一句丢弃一句。
+ */
+const FIRST_LINE_CANDIDATES = [
+  "You are an AI assistant.",
+  "You are an assistant.",
+  "You are a general-purpose AI assistant.",
+  "You are a helpful AI assistant.",
+  "You are a capable AI assistant.",
+  "You are an AI agent.",
+  "You are a knowledgeable AI assistant.",
+  "You are a friendly AI assistant.",
+  "You are a smart AI assistant.",
+  "You are an AI.",
+]
+
 
 /**
  * 读一次「首行改写」配置。
@@ -288,23 +308,6 @@ function firstLineOf(text) {
   return cut < 0 ? text : text.slice(0, cut)
 }
 
-/**
- * 这次请求里的 system 首行 —— 403 兜底重试拿它跟用户自己那句比：一样就不再白试一次。
- *
- * @param {unknown} bodyString
- * @returns {string}
- */
-function systemFirstLineOf(bodyString) {
-  if (typeof bodyString !== "string") return ""
-  let json = null
-  try {
-    json = JSON.parse(bodyString)
-  } catch {
-    return ""
-  }
-  return firstLineInBody(json)
-}
-
 // ⚠ 不要用 TABLE（`DISPLAY_BY_SLOT`）当准入集合。
 //   TABLE 是**对外展示目录**，不是「上游可用集合」：`app-auto` / `file-auto` /
 //   `computer-auto` / `browser-auto` 这类旧真实槽位不在 TABLE 里，上游却仍然 200。
@@ -428,18 +431,51 @@ export function loaderHook(input, options = {}) {
         }
 
         /**
-         * 403 兜底：把首行换成兜底句，**重试一次**。
-         * 成功返回规范化后的响应；失败返回 null（落回统一诊断，不把第二次的错误文本当结果）。
+         * 403 自愈：命中内容过滤时逐个换首行重试。
+         * 顺序 = 用户/默认那句（firstLine.text）→ 候选池随机打乱；每句都排除当前首行与已试过的，
+         * 换一句就重签 uskey 重发一次，一直换到不 403 为止（最多 MAX_TRIES 次）。
+         * 都撞了才返回 null，交回统一 403 诊断；请求里没有可改的 system 首行时直接 null。
          */
-        const retryWithFallbackFirstLine = async (json) => {
-          const next = withFirstLineInBody(json, firstLine.text)
-          if (next === json) return null // 三处都找不到 system 文本，无从下手
-          try {
-            const retry = await callUpstream(JSON.stringify(next))
-            return retry.ok ? normalizeStreaming(retry) : null
-          } catch {
-            return null
+        const retryWithRandomFirstLines = async (json) => {
+          const current = (firstLineInBody(json) || "").trim()
+          const seen = new Set(current ? [current] : [])
+          const order = []
+          const prefer = (firstLine.text || "").trim()
+          if (prefer && !seen.has(prefer)) {
+            seen.add(prefer)
+            order.push(prefer)
           }
+          const pool = FIRST_LINE_CANDIDATES.filter((c) => !seen.has(c.trim()))
+          for (let i = pool.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1))
+            const t = pool[i]
+            pool[i] = pool[j]
+            pool[j] = t
+          }
+          for (const c of pool) order.push(c)
+          const MAX_TRIES = 8
+          let tries = 0
+          for (const text of order) {
+            if (tries++ >= MAX_TRIES) break
+            const next = withFirstLineInBody(json, text)
+            if (next === json) continue // 请求里没有可改的 system 首行
+            let retry
+            try {
+              retry = await callUpstream(JSON.stringify(next))
+            } catch {
+              continue
+            }
+            if (retry.ok) return normalizeStreaming(retry)
+            // 仍是「403 + 非法请求」= 换下一句；换成别的错误（登录 / 风控 / 模型）就停
+            let errText = ""
+            try {
+              errText = await retry.clone().text()
+            } catch {
+              /* 读不出按状态判 */
+            }
+            if (!(retry.status === 403 && /非法请求|permission_error/i.test(errText))) break
+          }
+          return null
         }
 
         // ⚠ 旧路由里模型 ID 是数组下标 `"0"…"7"`，上游只认槽位名。
@@ -449,13 +485,9 @@ export function loaderHook(input, options = {}) {
         const originalBody = typeof body === "string" ? body : ""
         /** @type {string | null} 命中「明确不可用」名单的模型 ID */
         let unavailableModel = null
-        /** 请求体里的 system 首行 —— 403 兜底重试拿它比「是不是已经是用户那句」 */
-        let systemFirstLine = ""
         /** 解析后的请求体 —— 403 兜底重试要用它重建 body */
         let requestJson = null
         if (typeof body === "string") {
-          // 只做标记，不改 body —— 命中与否只影响错误文案
-          systemFirstLine = systemFirstLineOf(originalBody)
           let json = null
           try {
             json = JSON.parse(body)
@@ -552,10 +584,10 @@ export function loaderHook(input, options = {}) {
         //   而 403 + 这个组合目前只出现在内容过滤上（模型无权限是 400「无效模型id」）。
         //   宁可多给一句「进群」，也不要把人甩回宿主那句「API 密钥无效」。
         if (response.status === 403 && /非法请求|permission_error/i.test(text)) {
-          // 兜底：把 system 首行换成**用户自己写的那句**（选项「提示词首行替换」；留空 = 内置兜底句）
-          // 重试一次。已经是那句就不白试（省一次请求，也不掩盖真问题）。
-          if (firstLine.mode === "blocked" && requestJson && systemFirstLine !== firstLine.text) {
-            const retried = await retryWithFallbackFirstLine(requestJson)
+          // 内置自愈：命中内容过滤就逐个换首行重试（候选池随机、排除已试过的），
+          // always / blocked 都走这条 —— 只要池里还有一句没被上游拉黑就能救回来。
+          if (requestJson && firstLine.mode !== "off") {
+            const retried = await retryWithRandomFirstLines(requestJson)
             if (retried) return retried
           }
           return errorResponse(403, "content_filtered", CONTENT_FILTER_HINT)

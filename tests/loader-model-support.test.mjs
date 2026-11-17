@@ -548,7 +548,7 @@ test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节
 //   mode=always  每个请求都把首行换成 text
 // ─────────────────────────────────────────────────────────────
 
-test("默认 blocked：403 后换兜底首行重试一次，第二次仍 403 才报 content_filtered", async () => {
+test("默认 blocked：403 后逐个换候选首行重试，全被拦才报 content_filtered", async () => {
   const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -559,15 +559,16 @@ test("默认 blocked：403 后换兜底首行重试一次，第二次仍 403 才
     ]
     req.init.body = JSON.stringify(body)
     const res = await (await loaderOf()).fetch(req.url, req.init)
-    assert.equal(s.calls.length, 2, "被拦之后要重试一次（一次原样、一次兜底）")
-    const retried = JSON.parse(s.calls[1].init.body)
-    assert.equal(
-      retried.messages[0].content,
-      "You are Marvis, Tencent's AI assistant.\nExtra line stays.",
-      "兜底句不含任何 agent 产品名；第二行原样保留",
+    // 新行为：被拦后换首行重试，逐个换候选池里的**不同**句子（不再是固定兜底句只试一次）
+    assert.ok(s.calls.length >= 2, "被拦之后要换首行重试")
+    const triedLines = s.calls.slice(1).map((c) => JSON.parse(c.init.body).messages[0].content.split("\n")[0])
+    assert.equal(new Set(triedLines).size, triedLines.length, "每次重试都换一句不同的首行，不重复")
+    assert.ok(
+      triedLines.every((l) => l !== "You are Claude Code, Anthropic's CLI for Claude."),
+      "不会拿原来那句再试一遍",
     )
     assert.equal(res.status, 403)
-    assert.equal((await res.json()).error.code, "content_filtered", "两次都被拦时才给诊断")
+    assert.equal((await res.json()).error.code, "content_filtered", "全部候选都被拦时才给诊断")
   } finally {
     s.restore()
   }
@@ -613,7 +614,7 @@ test("200 时任何身份句都不改写（插件不再猜等价句）", async (
   }
 })
 
-test("403 时首行已经是用户那句 → 不重试（只打一次）", async () => {
+test("403 时首行已经是用户那句 → 仍换候选池里的别的句子重试（不再拿同一句白试）", async () => {
   const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -622,7 +623,12 @@ test("403 时首行已经是用户那句 → 不重试（只打一次）", async
     req.init.body = JSON.stringify(body)
     const res = await (await loaderOf()).fetch(req.url, req.init)
     assert.equal(res.status, 403)
-    assert.equal(s.calls.length, 1, "首行已经是那句了，重试也一样被拦，不再白打一次")
+    assert.ok(s.calls.length > 1, "首行已是那句被拦时，也要换别的句子再试，尽量救回")
+    const triedLines = s.calls.slice(1).map((c) => JSON.parse(c.init.body).messages[0].content.split("\n")[0])
+    assert.ok(
+      triedLines.every((l) => l !== "You are Marvis, Tencent's AI assistant."),
+      "不会再拿用户那句白试一遍",
+    )
   } finally {
     s.restore()
   }
