@@ -1,32 +1,43 @@
 // 首行文本面板（magpie.panels，slot: provider）
 //
-// 只做一件事：把 `magpie.options.firstLine.text` 做成一个**输入框**。
+// 一行：标签 · 当前值 · 「设置…」按钮；点按钮弹出原生 <dialog>，里面是输入框 + 取消/保存。
 // 开关是 magpie 原生渲染的（`auth.options`，只支持布尔），文本没有原生控件，所以走面板。
 //
 // ⚠ options.set 是**整份替换**（一秒最多一次）：
-//   每次都要把读到的 opts 展开再写回，否则会把别的键抹掉；输入用 1.2s 防抖。
+//   每次都要把读到的 opts 展开再写回，否则会把别的键抹掉。只在按「保存」时写一次。
 
 (async () => {
   const FALLBACK = "You are a helpful assistant."
   const $ = (id) => document.getElementById(id)
+  const row = $("value")
+  const dlg = $("dlg")
+  const form = $("form")
   const input = $("text")
   const saved = $("saved")
 
   const STRINGS = {
     zh: {
+      label: "首行文本",
+      open: "设置…",
       title: "首行文本",
-      label: "首行",
-      hint: "「每个请求都改写首行」打开时，system 提示词的第一行会被换成下面这句；留空 = 内置兜底句。",
+      hint: "「每个请求都改写首行」打开时，system 提示词的第一行会换成下面这句。",
       note: `留空 = ${FALLBACK}（不含任何 agent 产品名）`,
+      empty: "（内置兜底句）",
+      cancel: "取消",
+      save: "保存",
       done: "已保存 · 下一个请求起生效",
       fail: "保存失败：",
       readFail: "读数失败，先按默认显示：",
     },
     en: {
-      title: "First line text",
       label: "First line",
-      hint: "With “every request” on, the system prompt's first line becomes this one; empty = the built-in fallback.",
+      open: "Edit…",
+      title: "First line text",
+      hint: "With “every request” on, the system prompt's first line becomes this one.",
       note: `Empty = ${FALLBACK} (no agent product name in it)`,
+      empty: "(the built-in fallback)",
+      cancel: "Cancel",
+      save: "Save",
       done: "Saved · takes effect on the next request",
       fail: "Could not save: ",
       readFail: "Could not read the options; showing defaults: ",
@@ -37,45 +48,86 @@
 
   const lang = String(magpie.theme?.lang || document.documentElement.lang || "en").toLowerCase()
   const t = STRINGS[lang.startsWith("zh") ? "zh" : "en"]
+  $("label").textContent = t.label
+  $("open").textContent = t.open
   $("title").textContent = t.title
-  $("text-label").textContent = t.label
+  $("text-label") && ($("text-label").textContent = t.label)
   $("hint").textContent = t.hint
   $("fallback-note").textContent = t.note
+  $("cancel").textContent = t.cancel
+  $("save").textContent = t.save
   input.placeholder = FALLBACK
 
   /** 读到的整份选项 —— 写回时必须原样带上 */
   let opts = {}
-  try {
-    const got = await magpie.options.get()
-    if (got && typeof got === "object" && !Array.isArray(got)) opts = got
-  } catch (err) {
-    saved.textContent = t.readFail + (err?.message || err)
-  }
 
-  const firstLine = opts.firstLine && typeof opts.firstLine === "object" ? opts.firstLine : {}
-  input.value = typeof firstLine.text === "string" ? firstLine.text : ""
-
-  let timer = 0
-  const save = () => {
-    clearTimeout(timer)
-    timer = setTimeout(async () => {
-      const next = { ...opts, firstLine: { ...firstLine, text: input.value } }
-      try {
-        const back = await magpie.options.set(next)
-        opts = back && typeof back === "object" && !Array.isArray(back) ? back : next
-        saved.textContent = t.done
-      } catch (err) {
-        saved.textContent = t.fail + (err?.message || err)
-      }
-    }, 1200)
-  }
-
-  input.addEventListener("input", save)
-  input.addEventListener("change", save)
-  input.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") {
-      clearTimeout(timer)
-      save()
+  const readOpts = async () => {
+    try {
+      const got = await magpie.options.get()
+      if (got && typeof got === "object" && !Array.isArray(got)) opts = got
+    } catch (err) {
+      saved.textContent = t.readFail + (err?.message || err)
     }
+    return opts
+  }
+
+  const firstLineOf = (o) => (o.firstLine && typeof o.firstLine === "object" ? o.firstLine : {})
+  const textOf = (o) => {
+    const v = firstLineOf(o).text
+    return typeof v === "string" ? v : ""
+  }
+
+  const paint = () => {
+    const v = textOf(opts)
+    row.textContent = v || t.empty
+    row.title = v || ""
+  }
+
+  await readOpts()
+  paint()
+
+  const open = async () => {
+    // 每次打开都重新读一次：别的窗口/CLI 可能刚改过
+    await readOpts()
+    paint()
+    input.value = textOf(opts)
+    saved.textContent = ""
+    if (typeof dlg.showModal === "function") {
+      dlg.showModal()
+      input.focus()
+      input.select()
+    } else {
+      // 老 WebKit 没有 <dialog>：退化成原地展开，仍然是输入框 + 保存
+      dlg.setAttribute("open", "")
+      input.focus()
+    }
+  }
+
+  $("open").addEventListener("click", open)
+
+  form.addEventListener("submit", async (ev) => {
+    const action = ev.submitter?.value || "cancel"
+    ev.preventDefault()
+    if (action !== "save") {
+      if (typeof dlg.close === "function") dlg.close()
+      else dlg.removeAttribute("open")
+      return
+    }
+    const next = { ...opts, firstLine: { ...firstLineOf(opts), text: input.value } }
+    try {
+      const back = await magpie.options.set(next)
+      opts = back && typeof back === "object" && !Array.isArray(back) ? back : next
+      paint()
+      saved.textContent = t.done
+      if (typeof dlg.close === "function") dlg.close()
+      else dlg.removeAttribute("open")
+    } catch (err) {
+      saved.textContent = t.fail + (err?.message || err)
+    }
+  })
+
+  // 点背景关掉（dialog 的默认行为是点遮罩不关）
+  dlg.addEventListener("click", (ev) => {
+    if (ev.target === dlg) dlg.close?.()
   })
 })()

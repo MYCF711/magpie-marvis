@@ -60,7 +60,8 @@ test("走 bridge 读改写：options.get / set 都在，且写回保留别的键
     assert.match(js, /magpie\.options\.set\(/, "要能写选项")
     assert.match(js, /\.\.\.opts/, "options.set 是整份替换，写回必须展开读到的整份 opts")
     assert.match(js, /firstLine/, "写回的是 loader 读的那个字段 firstLine")
-    assert.match(js, /1200|1000/, "options.set 一秒最多一次，输入要防抖")
+    assert.match(js, /submit/, "写回要挂在「保存」按钮的 submit 上")
+    assert.ok(!/addEventListener\("input"/.test(js), "不要边打字边写：options.set 一秒最多一次")
   }
 })
 

@@ -8,27 +8,30 @@
 <script src="first-line.js" defer></script>
 </head>
 <body>
-<!--
-  provider 编辑器里的「首行文本」输入框（magpie.panels，slot: provider）。
 
-  ⚠ 为什么文本框要单独做个面板：magpie 的 `auth.options` 只支持**布尔开关**，
-  没有文本类型；开关在供应商卡片里由 magpie 原生渲染（那两行 Off/On），
-  文本框只能走面板这条路。位置由 magpie 决定（编辑器末尾、取消/保存之上）。
--->
+<!-- 一行：标签 · 当前值 · 「设置…」按钮。点按钮才弹出输入框，面板本身不占高度。 -->
 <section class="fl">
-  <h2 id="title">首行文本</h2>
-  <p class="muted" id="hint">
-    「每个请求都改写首行」打开时，system 提示词的第一行会被换成下面这句。
-    留空 = 内置兜底句。
-  </p>
-
   <div class="fl-row">
-    <label for="text" id="text-label">首行</label>
-    <input id="text" type="text" spellcheck="false" autocomplete="off">
+    <span class="fl-label" id="label">首行文本</span>
+    <span class="fl-value" id="value">—</span>
+    <button id="open" class="fl-btn" type="button">设置…</button>
   </div>
-
-  <p class="muted" id="fallback-note"></p>
   <p class="fl-status" id="saved" role="status" aria-live="polite"></p>
+
+  <dialog id="dlg" class="fl-dialog">
+    <form id="form" method="dialog" class="fl-form">
+      <h2 id="title">首行文本</h2>
+      <p class="muted" id="hint">
+        「每个请求都改写首行」打开时，system 提示词的第一行会换成下面这句。留空 = 内置兜底句。
+      </p>
+      <input id="text" type="text" spellcheck="false" autocomplete="off">
+      <p class="muted" id="fallback-note"></p>
+      <div class="fl-actions">
+        <button id="cancel" class="fl-btn" type="submit" value="cancel">取消</button>
+        <button id="save" class="fl-btn fl-primary" type="submit" value="save">保存</button>
+      </div>
+    </form>
+  </dialog>
 </section>
 </body>
 </html>
