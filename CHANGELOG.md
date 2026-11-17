@@ -5,7 +5,7 @@
 
 ## 0.2.54 — 2026-11-17
 
-**修（首行改写只认 chat 的 `messages[]`：Anthropic / Responses 协议下等于空操作，issue #62）**
+**修（首行改写只认 chat 的 `messages[]`：Anthropic / Responses 协议下等于空操作，issue #62 —— 由 @zhey80 用 `up_bytes` 差值定位）**
 
 - 新增 `withFirstLineInBody` / `firstLineInBody`：一处按协议取/放 system 文本，always 与 403 兜底两条路共用
   - chat：`messages[]` 里第一条 `role: system`
