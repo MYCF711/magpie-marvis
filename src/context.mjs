@@ -187,7 +187,7 @@ export const PLUGIN_OPTIONS = Object.freeze([
   Object.freeze({
     key: "first_line_always",
     label: "Rewrite the first line of every request",
-    labels: { zh: "每个请求都改写首行" },
+    labels: { zh: "每个请求都改写首行（文本在「选项」里）" },
     default: false,
     placement: "top",
     confirm: "Every request will have its system prompt's first line replaced, including the ones that would work as they are.",

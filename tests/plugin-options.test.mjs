@@ -76,6 +76,16 @@ test("一条开关只占一行：不写 description（多一行就会压到「�
   }
 })
 
+test("中文 label 要短到能一行放下（汉字宽度约等于两个英文列）", () => {
+  // magpie 只按「字符数」校验 label ≤60，中文能过；但一个汉字约两列宽，
+  // 40 个汉字 ≈ 80 列，窄一点的窗口就会折行 —— 而选项行只预留一行高度，
+  // 折出来的第二行会压在下面「模型」区块上（#59）。这里按显示宽度锁 ≤24 个汉字。
+  for (const o of PLUGIN_OPTIONS) {
+    const zh = o.labels?.zh ?? ""
+    assert.ok(zh.length <= 24, `${o.key} 的 labels.zh 有 ${zh.length} 个字，超过 24 就会在窄窗口折行压到「模型」`)
+  }
+})
+
 test("两个开关都要置顶（placement: \"top\"）—— 排在路由/模型之后等于找不到", () => {
   for (const o of PLUGIN_OPTIONS) {
     assert.equal(o.placement, "top", `${o.key} 缺 placement: "top"，会被画在模型之后`)
