@@ -48,78 +48,27 @@ const AUTH_EXPIRED = /4100403|登录态过期|未登录/
  *   用户看到的仍是宿主那句「API 密钥无效」。
  */
 /**
- * 主流客户端**默认首句** → 能放行的等价句（整句精确匹配才换）。
- *
- * ⚠ 为什么是「整句白名单」而不是正则：
- *   ① 用户自己改过的首句**一个字节都不动** —— 不跟用户的修改打架，也不可能被二次改写；
- *   ② 前缀稳定：同一客户端每次得到同一句 ⇒ 上游前缀缓存照常命中。
- *      正则那种「形状像就改」在用户微调首句后仍会改写，前缀反复变、缓存反复失效；
- *   ③ 出问题时一眼能看出改了什么（整句就是表里那一句）。
- * ⚠ 表里出现新写法 = 新客户端版本 / 新指纹。宁可漏（有 403 诊断兜底），不可错改。
- *
- * 每行：原句（不带句末标点、空白已归一）→ 替换句（带句末标点）。
- * 实测（2026-11-17，直打 127.0.0.1:3425，同一分钟只换 system 首句）：左列 403 → 右列 200。
- */
-const IDENTITY_SENTENCES = new Map([
-  // DeepSeek Harness（我们自己的，改得理直气壮）
-  ["You are an AI agent powered by DeepSeek Harness", "You are an AI agent running in DeepSeek Harness."],
-  // Claude Code / Claude Desktop / 裸 Claude；连字符是老版本产物，用户可能已手改过
-  [
-    "You are Claude Code, Anthropic's official CLI for Claude",
-    "You are an agent, Claude Code, Anthropic's official CLI for Claude.",
-  ],
-  [
-    "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK",
-    "You are an agent, Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
-  ],
-  [
-    "You are Claude-Code, Anthropic's official CLI for Claude",
-    "You are an agent, Claude-Code, Anthropic's official CLI for Claude.",
-  ],
-  ["You are Claude Code", "You are an agent, Claude Code."],
-  ["You are Claude", "You are an agent, Claude."],
-  // Codex CLI / Codex Desktop
-  [
-    "You are a coding agent running in the Codex CLI, a terminal-based coding assistant",
-    "You are a coding agent, running in the Codex CLI, a terminal-based coding assistant.",
-  ],
-  [
-    "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant",
-    "You are a coding agent, running in the Codex-CLI, a terminal-based coding assistant.",
-  ],
-  ["You are a coding agent running in the Codex", "You are a coding agent, running in the Codex."],
-  // ZCode（issue #38）
-  [
-    "You are ZCode, an interactive agent working with the user toward their goals",
-    "You are Z-Code, an interactive agent working with the user toward their goals.",
-  ],
-  ["You are ZCode", "You are Z-Code."],
-])
-
-/** 判定用（只看原文，不参与改写）：命中任一条即认为这次 403 是内容过滤 */
-const IDENTITY_PHRASE_TEST =
-  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent\s+running in the Codex|You are\s+Claude\b|You are\s+ZCode\b|你是一个由\s*DeepSeek\s+Harness/i
-
-/**
  * 上游内容过滤拦截时的**统一**提示（本插件自己的 403 文案，不发给上游）。
  *
- * ⚠ 覆盖的是「**已知会被改写 + 仍被拦**」这一种状态，措辞必须同时成立三件事：
+ * ⚠ 措辞必须同时成立三件事：
  *   ① 性质是内容过滤，不是密钥或登录（否则用户去重登，白折腾）；
- *   ② 说明这件事客户端多半不用管 —— 常见身份句插件已经替他改了；
- *   ③ 给出「还没覆盖」时的上报动作（把首行带到群里），并留一条 DSH 的手工改法。
+ *   ② 说明**怎么自己解决** —— 首行是用户自己的事，插件只负责把它写进去；
+ *   ③ 给出「还是被拦」时的上报动作（把首行带到群里）。
  * ⚠ 不要把「改哪一句」写死成唯一修法：不同客户端首句不同（issue #38 的 ZCode 提示词不可配置，
  *   用户侧根本没有可改的地方），写死一家会在别家命中时把人带偏。
  */
 const CONTENT_FILTER_HINT =
-  "上游内容过滤拦截：系统提示词首句被当成身份指纹（不是密钥或登录问题）。" +
-  "主流客户端的默认首句（DSH / Claude Code / Claude Desktop / Codex / ZCode）会在本插件里" +
-  "按整句白名单换成等价句；自己改过首句的请求不动（不跟你的修改打架）。" +
-  "仍然被拦说明这句还没进白名单 —— 把 system 首行原样带到 QQ 群 451129479，加一行就能修。"
+  "上游内容过滤拦截：系统提示词首句被当成了身份指纹（不是密钥或登录问题）。" +
+  "插件不再替你猜「哪句能过」—— 上游的黑名单一直在长，今天能过的改写明天就被加进去。" +
+  "首行请自己写一句：设置 → 插件 → 本插件「选项」把「提示词首行替换」换成你的话" +
+  "（别写任何 agent 产品名），再打开卡片上的「每个请求都改写首行」；只想被拦后兜底就保持默认。" +
+  "还是被拦就把 system 首行原样带到 QQ 群 451129479。"
 
 // ── 首行兜底（插件选项 firstLine）────────────────────────────────────
 //
-// 为什么要有它：整句白名单只覆盖「已知客户端的默认首句」。用户改过的首句、新客户端、
-// 我们还没见过的写法，白名单都救不了 —— 而这些请求同样会被 403 拦死。
+// 为什么要有它：上游拦的是「system 首行里的身份词对」，而**哪句能过一直在变** ——
+// 我们把一句句首行加进白名单，换来的是它们很快也被拦。所以不再替用户猜：
+// 首行由用户自己写（选项「提示词首行替换」），插件只负责把它写进去。
 // 兜底句不含任何 agent 产品名（`You are a helpful assistant.` 实测 200），
 // 它能过；代价是模型不知道自己是哪个客户端，所以**默认只在被拦之后才用**（mode=blocked）。
 //
@@ -129,7 +78,7 @@ const CONTENT_FILTER_HINT =
 //
 //   first_line_fallback（默认开）被拦时换兜底句重试一次 → blocked
 //   first_line_always  （默认关）每个请求都换首行        → always
-//   两个都关                                            → off（只走白名单）
+//   两个都关                                            → off（一个字节都不改）
 //
 // 首行文本来自插件选项的 JSON，**就一个键**（`magpie.options` = `{"text": "…"}`）：
 // 设置 → 插件 → 本插件那一行的「选项」框里直接改那句话。只留一个键是有意的 ——
@@ -247,66 +196,27 @@ function firstLineOf(text) {
   return cut < 0 ? text : text.slice(0, cut)
 }
 
-/** 首行里的第一句（到第一个句末标点为止；没有标点就是整行） */
-function firstSentenceOf(line) {
-  const m = /^[\s\S]*?[.!?](?=\s|$)/.exec(line)
-  return m ? m[0] : line
-}
-
 /**
- * 首句命中白名单就整句换掉；没命中（用户改过的、新版本的、没见过的）**原样返回**。
- *
- * 只动一个句子：行内其余内容与后续行一个字节都不碰；替换**幂等** ——
- * 换完的句子不在表里，下次调用不会再动它（前缀因此稳定，缓存不会反复失效）。
- */
-function rewriteFirstLine(text) {
-  const line = firstLineOf(text)
-  const sentence = firstSentenceOf(line)
-  const rest = line.slice(sentence.length)
-  const key = sentence.replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "")
-  const to = IDENTITY_SENTENCES.get(key)
-  if (!to) return text
-  const next = to + rest
-  return next === line ? text : next + text.slice(line.length)
-}
-
-function rewriteAgentIdentity(messages) {
-  if (!Array.isArray(messages)) return messages
-  let touched = false
-  const out = messages.map((message) => {
-    if (!message || typeof message !== "object") return message
-    if (message.role !== "system") return message
-    if (typeof message.content !== "string") return message
-    const content = rewriteFirstLine(message.content)
-    if (content === message.content) return message
-    touched = true
-    return { ...message, content }
-  })
-  return touched ? out : messages
-}
-
-/**
- * 这次请求体里有没有「上游会拦的身份短语」—— **改写前**判定，只影响 403 的文案。
- * 只看 system 首行，与上游判据保持同一集合，避免把普通 403 误判成内容过滤。
+ * 这次请求里的 system 首行 —— 403 兜底重试拿它跟用户自己那句比：一样就不再白试一次。
  *
  * @param {unknown} bodyString
- * @returns {boolean}
+ * @returns {string}
  */
-function identityBlockedInSystem(bodyString) {
-  if (typeof bodyString !== "string") return false
+function systemFirstLineOf(bodyString) {
+  if (typeof bodyString !== "string") return ""
   let json = null
   try {
     json = JSON.parse(bodyString)
   } catch {
-    return false
+    return ""
   }
   const messages = Array.isArray(json?.messages) ? json.messages : []
   for (const message of messages) {
     if (!message || message.role !== "system") continue
     const text = typeof message.content === "string" ? message.content : ""
-    if (IDENTITY_PHRASE_TEST.test(firstLineOf(text))) return true
+    if (text.trim()) return firstLineOf(text).trim()
   }
-  return false
+  return ""
 }
 
 // ⚠ 不要用 TABLE（`DISPLAY_BY_SLOT`）当准入集合。
@@ -431,13 +341,13 @@ export function loaderHook(input, options = {}) {
         const originalBody = typeof body === "string" ? body : ""
         /** @type {string | null} 命中「明确不可用」名单的模型 ID */
         let unavailableModel = null
-        /** 请求体里是否含被上游内容过滤定向拦截的 DSH 标识语句 */
-        let harnessIdentityPrompt = false
+        /** 请求体里的 system 首行 —— 403 兜底重试拿它比「是不是已经是用户那句」 */
+        let systemFirstLine = ""
         /** 解析后的请求体 —— 403 兜底重试要用它重建 body */
         let requestJson = null
         if (typeof body === "string") {
           // 只做标记，不改 body —— 命中与否只影响错误文案
-          harnessIdentityPrompt = identityBlockedInSystem(originalBody)
+          systemFirstLine = systemFirstLineOf(originalBody)
           let json = null
           try {
             json = JSON.parse(body)
@@ -478,14 +388,7 @@ export function loaderHook(input, options = {}) {
                 }
                 throw err
               }
-              // ⚠ 上游内容过滤会精确拦下 DSH / Codex / Claude Desktop 的身份句
-              //   （issue #22 实测：身份短语中间换成连字符就放行）。自动改写，用户不用改客户端配置。
-              const rewritten = rewriteAgentIdentity(json.messages)
-              if (rewritten !== json.messages) {
-                json.messages = rewritten
-                changed = true
-              }
-              // mode=always：用户明确要求「每个请求都换成我填的那句」，优先级高于白名单
+              // mode=always：用户明确要求「每个请求都换成我填的那句」
               if (firstLine.mode === "always") {
                 const forced = withFirstLine(json.messages, firstLine.text)
                 if (forced !== json.messages) {
@@ -541,9 +444,9 @@ export function loaderHook(input, options = {}) {
         //   而 403 + 这个组合目前只出现在内容过滤上（模型无权限是 400「无效模型id」）。
         //   宁可多给一句「进群」，也不要把人甩回宿主那句「API 密钥无效」。
         if (response.status === 403 && /非法请求|permission_error/i.test(text)) {
-          // 兜底：白名单救不了的（用户改过首句 / 新客户端 / 没见过的写法），
-          // 换一句不含任何 agent 产品名的首行重试一次。宁可多打一次，也别把人卡死在 403。
-          if (firstLine.mode === "blocked" && requestJson) {
+          // 兜底：把 system 首行换成**用户自己写的那句**（选项「提示词首行替换」；留空 = 内置兜底句）
+          // 重试一次。已经是那句就不白试（省一次请求，也不掩盖真问题）。
+          if (firstLine.mode === "blocked" && requestJson && systemFirstLine !== firstLine.text) {
             const retried = await retryWithFallbackFirstLine(requestJson)
             if (retried) return retried
           }
