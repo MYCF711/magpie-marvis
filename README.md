@@ -125,6 +125,12 @@ magpie plugin add MYCF711/magpie-marvis
 
 > 开关是 magpie 自己的扩展点（`auth.options`，#2038）：点一下立刻保存，插件下一个请求就读到，**不用重启**。
 
+自定义首行那句除了 JSON，还有一个**输入框**（`magpie.panels` 面板）。⚠ 面板清单是窗口启动时拉的：
+用命令行更新插件后要按 **Ctrl+R** 或关掉窗口重开，输入框才会出现；开关不受影响。
+
+> 想把这个输入框或开关**置顶**：插件侧做不到 —— 位置写死在 magpie 的 `app.js`
+> （开关插在「高级」之前、面板追加在编辑器末尾）。上游提案草稿在 `$DSH_HOME/outbox/MYCF711-magpie-options-top.md`。
+
 ## 你的号被降级了没有？跑一条命令
 
 auto 家族（`main-auto` / `file-auto` / `computer-auto` / `browser-auto`）在服务端是**按账号**改路由的：
