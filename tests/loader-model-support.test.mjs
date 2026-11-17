@@ -51,9 +51,20 @@ function stubFetch(handler) {
   }
 }
 
-/** 取 loader 描述符（loaderHook 的形状是 getAuth => { fetch, baseURL, apiKey }） */
-async function loaderOf(options) {
-  const describe = await loaderHook(options)(async () => AUTH)
+/**
+ * 取 loader 描述符（loaderHook 的形状是 getAuth => { fetch, baseURL, apiKey }）
+ *
+ * @param {object} [options]  插件选项（设置页那份 JSON，例如 { firstLine: { text: "…" } }）
+ * @param {object} [switches] provider 卡片上的开关（auth.options 的 key → 布尔）；
+ *                            没给 = 插件默认（first_line_fallback 开、first_line_always 关）
+ */
+async function loaderOf(options, switches) {
+  const input = {
+    magpie: {
+      option: (_provider, key) => (switches && key in switches ? switches[key] : undefined),
+    },
+  }
+  const describe = await loaderHook(input, options)(async () => AUTH)
   assert.equal(typeof describe.fetch, "function", "loader 必须返回 fetch")
   return describe
 }
@@ -831,11 +842,11 @@ test("默认 blocked：重试成功时直接把 200 交给宿主（用户看不�
   }
 })
 
-test("mode=off：403 不重试（与 0.2.41 行为一致）", async () => {
+test("两个开关都关 → 403 不重试、不改写（只走白名单）", async () => {
   const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
-    const res = await (await loaderOf({ firstLine: { mode: "off" } })).fetch(req.url, req.init)
+    const res = await (await loaderOf({}, { first_line_fallback: false })).fetch(req.url, req.init)
     assert.equal(s.calls.length, 1)
     assert.equal(res.status, 403)
   } finally {
@@ -843,7 +854,7 @@ test("mode=off：403 不重试（与 0.2.41 行为一致）", async () => {
   }
 })
 
-test("mode=always：每个请求的首行都被换成配置的那句（优先级高于白名单）", async () => {
+test("first_line_always 开着：每个请求的首行都被换成配置的那句（优先级高于白名单）", async () => {
   const s = stubFetch(() => upstreamOk())
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -854,7 +865,7 @@ test("mode=always：每个请求的首行都被换成配置的那句（优先级
     ]
     req.init.body = JSON.stringify(body)
     const custom = "You are an assistant that answers in Chinese."
-    await (await loaderOf({ firstLine: { mode: "always", text: custom } })).fetch(req.url, req.init)
+    await (await loaderOf({ firstLine: { text: custom } }, { first_line_always: true })).fetch(req.url, req.init)
     assert.equal(s.calls.length, 1, "always 模式直接改，不需要先撞一次 403")
     const sent = JSON.parse(s.calls[0].init.body)
     assert.equal(sent.messages[0].content, `${custom}\nSecond line stays.`)
@@ -867,8 +878,8 @@ test("text 留空 / 选项形状不对 → 用内置兜底句，绝不让请求�
   const cases = [
     {},
     { firstLine: {} },
-    { firstLine: { mode: "blocked", text: "   " } },
-    { firstLine: { mode: "not-a-mode", text: 42 } },
+    { firstLine: { text: "   " } },
+    { firstLine: { text: 42 } },
     { firstLine: "oops" },
   ]
   for (const options of cases) {

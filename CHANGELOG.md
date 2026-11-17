@@ -3,6 +3,23 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.45 — 2026-11-17
+
+**修复（开关放错层：0.2.44 的 provider 面板换成 magpie 自带的 `auth.options` 开关）**
+
+- 0.2.44 用 `magpie.panels` 在供应商编辑器里开了个 iframe 面板 —— 机制没写错，但对这件事是**绕远路**：
+  面板清单要窗口重载才刷新，装完看不出变化；而且它要维护一套 HTML/JS。
+- magpie 本来就有这个扩展点（`auth.options`，#2038，`internal/plugin/host.js` 的 `optionsOf`）：
+  插件声明 `{key, label, description?, default?, confirm?, labels?, descriptions?, confirms?}`，
+  magpie 在**供应商编辑器**里每条画一行 Off/On，点一下立刻保存，插件用
+  `input.magpie.option("marvis", key)` 现读 —— **不用重启、不用窗口重载**
+- 两个开关：`first_line_fallback`（默认开，被 403 拦下时换兜底句重试一次）、
+  `first_line_always`（默认关，每个请求都改写；开了先弹一次确认）
+- 自定义首行文本仍在插件选项 JSON 里（`firstLine.text`，留空 = 内置兜底句）
+- 删掉 `magpie.panels` / `panel/*` / 对应的 4 个面板用例；新增 `tests/plugin-options.test.mjs`（4 项），
+  按 magpie 的校验规则锁住开关形状（key 正则、label ≤60、default 布尔、zh 文案、最多 16 条）
+- 验收：测试 179 项中 175 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.44 — 2026-11-17
 
 **新增（provider 编辑器里的「首行改写」面板：开关 + 输入框，不用手写 JSON）**
