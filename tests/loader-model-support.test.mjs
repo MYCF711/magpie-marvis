@@ -52,8 +52,8 @@ function stubFetch(handler) {
 }
 
 /** 取 loader 描述符（loaderHook 的形状是 getAuth => { fetch, baseURL, apiKey }） */
-async function loaderOf() {
-  const describe = await loaderHook()(async () => AUTH)
+async function loaderOf(options) {
+  const describe = await loaderHook(options)(async () => AUTH)
   assert.equal(typeof describe.fetch, "function", "loader 必须返回 fetch")
   return describe
 }
@@ -773,3 +773,122 @@ test("Codex 身份句被拦时也要给 content_filtered 诊断（旧版只有 D
   }
 })
 
+// ─────────────────────────────────────────────────────────────
+// 首行兜底（插件选项 firstLine）
+//
+// 白名单只覆盖「已知客户端的默认首句」；用户改过的首句、新客户端、没见过的写法都救不了，
+// 而这些请求同样会被 403 拦死。兜底句不含任何 agent 产品名（实测 200），默认**只在被拦后**用：
+//   mode=off     只走白名单
+//   mode=blocked 403 非法请求 → 换兜底首行重试一次（默认）
+//   mode=always  每个请求都把首行换成 text
+// ─────────────────────────────────────────────────────────────
+
+test("默认 blocked：403 后换兜底首行重试一次，第二次仍 403 才报 content_filtered", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      { role: "system", content: "You are Claude Code, Anthropic's official CLI for Claude.\nExtra line stays." },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(s.calls.length, 2, "被拦之后要重试一次（一次原样、一次兜底）")
+    const retried = JSON.parse(s.calls[1].init.body)
+    assert.equal(
+      retried.messages[0].content,
+      "You are a helpful assistant.\nExtra line stays.",
+      "兜底句不含任何 agent 产品名；第二行原样保留",
+    )
+    assert.equal(res.status, 403)
+    assert.equal((await res.json()).error.code, "content_filtered", "两次都被拦时才给诊断")
+  } finally {
+    s.restore()
+  }
+})
+
+test("默认 blocked：重试成功时直接把 200 交给宿主（用户看不到 403）", async () => {
+  let n = 0
+  const s = stubFetch(() => {
+    n += 1
+    return n === 1
+      ? upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" })
+      : upstreamOk()
+  })
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [{ role: "system", content: "You are Claude, my buddy." }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 200)
+    assert.equal(s.calls.length, 2)
+    const retried = JSON.parse(s.calls[1].init.body)
+    assert.equal(retried.messages[0].content, "You are a helpful assistant.", "自定义首句救不了时，换兜底句")
+  } finally {
+    s.restore()
+  }
+})
+
+test("mode=off：403 不重试（与 0.2.41 行为一致）", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const res = await (await loaderOf({ firstLine: { mode: "off" } })).fetch(req.url, req.init)
+    assert.equal(s.calls.length, 1)
+    assert.equal(res.status, 403)
+  } finally {
+    s.restore()
+  }
+})
+
+test("mode=always：每个请求的首行都被换成配置的那句（优先级高于白名单）", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      { role: "system", content: "You are Claude Code, Anthropic's official CLI for Claude.\nSecond line stays." },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    const custom = "You are an assistant that answers in Chinese."
+    await (await loaderOf({ firstLine: { mode: "always", text: custom } })).fetch(req.url, req.init)
+    assert.equal(s.calls.length, 1, "always 模式直接改，不需要先撞一次 403")
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.messages[0].content, `${custom}\nSecond line stays.`)
+  } finally {
+    s.restore()
+  }
+})
+
+test("text 留空 / 选项形状不对 → 用内置兜底句，绝不让请求失败", async () => {
+  const cases = [
+    {},
+    { firstLine: {} },
+    { firstLine: { mode: "blocked", text: "   " } },
+    { firstLine: { mode: "not-a-mode", text: 42 } },
+    { firstLine: "oops" },
+  ]
+  for (const options of cases) {
+    let n = 0
+    const s = stubFetch(() => {
+      n += 1
+      return n === 1
+        ? upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" })
+        : upstreamOk()
+    })
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: "You are Claude, my buddy." }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      const res = await (await loaderOf(options)).fetch(req.url, req.init)
+      assert.equal(res.status, 200, `配置写错也要能跑：${JSON.stringify(options)}`)
+      assert.equal(JSON.parse(s.calls[1].init.body).messages[0].content, "You are a helpful assistant.")
+    } finally {
+      s.restore()
+    }
+  }
+})

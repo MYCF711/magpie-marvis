@@ -116,6 +116,73 @@ const CONTENT_FILTER_HINT =
   "按整句白名单换成等价句；自己改过首句的请求不动（不跟你的修改打架）。" +
   "仍然被拦说明这句还没进白名单 —— 把 system 首行原样带到 QQ 群 451129479，加一行就能修。"
 
+// ── 首行兜底（插件选项 firstLine）────────────────────────────────────
+//
+// 为什么要有它：整句白名单只覆盖「已知客户端的默认首句」。用户改过的首句、新客户端、
+// 我们还没见过的写法，白名单都救不了 —— 而这些请求同样会被 403 拦死。
+// 兜底句不含任何 agent 产品名（`You are a helpful assistant.` 实测 200），
+// 它能过；代价是模型不知道自己是哪个客户端，所以**默认只在被拦之后才用**（mode=blocked）。
+//
+// mode 三种：
+//   off     只走白名单，不做兜底（行为与 0.2.41 一致）
+//   blocked 先按原样发；403 非法请求时**换兜底首行重试一次**（默认）
+//   always  每个请求都把首行换成 text（用户明确要求时用；前缀会一次性变化，之后稳定）
+//
+// text 留空 = 用内置兜底句。整行替换：只换 system 消息的第一行，第二行起原样。
+
+/** 内置兜底首行：不含任何 agent 产品名（实测 200） */
+const FALLBACK_FIRST_LINE = "You are a helpful assistant."
+
+const FIRST_LINE_MODES = new Set(["off", "blocked", "always"])
+
+/**
+ * 从插件选项里读 firstLine 配置。选项来自 magpie 设置页的 JSON（`magpie.options` 是默认值）。
+ * 任何形状不对的值都退回默认（blocked + 内置兜底句），绝不因为配置写错而让请求失败。
+ *
+ * @param {unknown} options
+ * @returns {{ mode: "off" | "blocked" | "always", text: string }}
+ */
+function firstLineOption(options) {
+  // 宿主可能把选项当 JSON 文本传（设置页就是文本框），两种形状都认
+  let opts = options
+  if (typeof opts === "string") {
+    try {
+      opts = JSON.parse(opts)
+    } catch {
+      opts = {}
+    }
+  }
+  const raw = opts?.firstLine
+  const mode = FIRST_LINE_MODES.has(raw?.mode) ? raw.mode : "blocked"
+  const text = typeof raw?.text === "string" && raw.text.trim() ? raw.text.trim().replace(/\s*\n\s*/g, " ") : FALLBACK_FIRST_LINE
+  return { mode, text }
+}
+
+/**
+ * 把 system 消息的**第一行**整行换掉（第二行起原样）。
+ *
+ * 只动第一条 system 消息 —— 再往后的 system 不是身份句的常见位置，改了反而多余。
+ * 没有 system 消息时原样返回（调用方据此判断有没有改动）。
+ *
+ * @param {unknown} messages
+ * @param {string} text
+ * @returns {unknown}
+ */
+function withFirstLine(messages, text) {
+  if (!Array.isArray(messages)) return messages
+  let touched = false
+  const out = messages.map((message) => {
+    if (touched) return message
+    if (!message || typeof message !== "object") return message
+    if (message.role !== "system" || typeof message.content !== "string") return message
+    touched = true
+    const line = firstLineOf(message.content)
+    return { ...message, content: text + message.content.slice(line.length) }
+  })
+  return touched ? out : messages
+}
+
+
 /**
  * 构造一个错误 Response。
  * @param {number} status
@@ -123,6 +190,9 @@ const CONTENT_FILTER_HINT =
  * @param {string} message
  * @param {Record<string, string>} [headers]
  */
+/** 请求头构造失败（uskey 现签）—— 与「连不上上游」不是一类故障，别混成同一个 503 */
+class HeaderUnavailable extends Error {}
+
 function errorResponse(status, code, message, headers = {}) {
   return new Response(JSON.stringify({ error: { type: "upstream_error", code, message } }), {
     status,
@@ -252,7 +322,9 @@ function credsOf(auth) {
   }
 }
 
-export function loaderHook() {
+export function loaderHook(options = {}) {
+  // 选项在钩子装配时读一次；改了插件选项，magpie 会重建插件（与其它钩子一致）
+  const firstLine = firstLineOption(options)
   return async (getAuth) => {
     const auth = await getAuth()
     const creds = credsOf(auth)
@@ -271,24 +343,56 @@ export function loaderHook() {
           return fetch(input, init)
         }
 
-        // ⚠ 每次都要重新算头：uskey 是一次性的
-        let headers
-        try {
-          headers = llmHeaders(creds, {
-            scene: "preload_summary",
-            agentTag: "auto_discovery",
-          })
-        } catch (err) {
-          return errorResponse(
-            503,
-            "header_unavailable",
-            `请求头构造失败：${err?.message ?? err}`,
-          )
+        /**
+         * 发一次上游请求。**每次都重新签 uskey** —— 它是一次性的：
+         * 403 兜底重试若复用上一次的 uskey，会直接撞风控（`risk_blocked`），
+         * 看起来像另一个故障，排查时会被带偏。
+         */
+        const callUpstream = async (payload) => {
+          let headers
+          try {
+            headers = llmHeaders(creds, { scene: "preload_summary", agentTag: "auto_discovery" })
+          } catch (err) {
+            throw new HeaderUnavailable(err?.message ?? String(err))
+          }
+          // 保留调用方传的 stream / 业务体，只换鉴权头
+          const merged = { ...(init?.headers ?? {}) }
+          for (const [k, v] of Object.entries(headers)) merged[k] = v
+          if (payload !== init?.body) {
+            // body 变了，长度 / 压缩头必须去掉，让 fetch 重新算
+            delete merged["content-length"]
+            delete merged["Content-Length"]
+            delete merged["content-encoding"]
+            delete merged["Content-Encoding"]
+          }
+          return fetch(url, { ...init, body: payload, headers: merged })
         }
 
-        // 保留调用方传的 stream / 业务体，只换鉴权头
-        const merged = { ...(init?.headers ?? {}) }
-        for (const [k, v] of Object.entries(headers)) merged[k] = v
+        /** 上游给流式响应时带的是 text/plain，但 body 是标准 SSE —— 归一化 content-type */
+        const normalizeStreaming = (res) => {
+          const ct = res.headers.get("content-type") ?? ""
+          if (res.body && !/event-stream/i.test(ct)) {
+            const headers = new Headers(res.headers)
+            headers.set("content-type", "text/event-stream; charset=utf-8")
+            return new Response(res.body, { status: res.status, headers })
+          }
+          return res
+        }
+
+        /**
+         * 403 兜底：把首行换成兜底句，**重试一次**。
+         * 成功返回规范化后的响应；失败返回 null（落回统一诊断，不把第二次的错误文本当结果）。
+         */
+        const retryWithFallbackFirstLine = async (json) => {
+          const messages = withFirstLine(json.messages, firstLine.text)
+          if (messages === json.messages) return null // 没有 system 消息，无从下手
+          try {
+            const retry = await callUpstream(JSON.stringify({ ...json, messages }))
+            return retry.ok ? normalizeStreaming(retry) : null
+          } catch {
+            return null
+          }
+        }
 
         // ⚠ 旧路由里模型 ID 是数组下标 `"0"…"7"`，上游只认槽位名。
         //   在这里做一次归一，旧路由不改配置也能继续用。
@@ -299,6 +403,8 @@ export function loaderHook() {
         let unavailableModel = null
         /** 请求体里是否含被上游内容过滤定向拦截的 DSH 标识语句 */
         let harnessIdentityPrompt = false
+        /** 解析后的请求体 —— 403 兜底重试要用它重建 body */
+        let requestJson = null
         if (typeof body === "string") {
           // 只做标记，不改 body —— 命中与否只影响错误文案
           harnessIdentityPrompt = identityBlockedInSystem(originalBody)
@@ -309,6 +415,7 @@ export function loaderHook() {
             /* 不是 JSON 就原样转发 */
           }
           if (json && typeof json === "object") {
+            requestJson = json
             let changed = false
             const canonical = canonicalModelId(json.model)
             if (canonical !== json.model) {
@@ -348,15 +455,16 @@ export function loaderHook() {
                 json.messages = rewritten
                 changed = true
               }
+              // mode=always：用户明确要求「每个请求都换成我填的那句」，优先级高于白名单
+              if (firstLine.mode === "always") {
+                const forced = withFirstLine(json.messages, firstLine.text)
+                if (forced !== json.messages) {
+                  json.messages = forced
+                  changed = true
+                }
+              }
             }
-            if (changed) {
-              body = JSON.stringify(json)
-              // body 变了，长度头必须去掉，让 fetch 重新算
-              delete merged["content-length"]
-              delete merged["Content-Length"]
-              delete merged["content-encoding"]
-              delete merged["Content-Encoding"]
-            }
+            if (changed) body = JSON.stringify(json)
           }
         }
 
@@ -367,22 +475,15 @@ export function loaderHook() {
 
         let response
         try {
-          response = await fetch(url, { ...init, ...(body === init?.body ? {} : { body }), headers: merged })
+          response = await callUpstream(body)
         } catch (err) {
+          if (err instanceof HeaderUnavailable) {
+            return errorResponse(503, "header_unavailable", `请求头构造失败：${err.message}`)
+          }
           return errorResponse(503, "upstream_unreachable", `连不上 Marvis 网关：${err?.message ?? err}`)
         }
 
-        if (response.ok) {
-          // 上游给流式响应时带的是 `text/plain` —— 但 body 是标准 SSE。
-          // 部分 OpenAI SDK 版本按 content-type 决定走不走 SSE 解析器，所以这里归一化。
-          const ct = response.headers.get("content-type") ?? ""
-          if (response.body && !/event-stream/i.test(ct)) {
-            const headers = new Headers(response.headers)
-            headers.set("content-type", "text/event-stream; charset=utf-8")
-            return new Response(response.body, { status: response.status, headers })
-          }
-          return response
-        }
+        if (response.ok) return normalizeStreaming(response)
 
         // —— 错误分流：只读 **错误** 的 body（成功响应绝不读，见文件头 ⚠）——
         let text = ""
@@ -410,6 +511,12 @@ export function loaderHook() {
         //   而 403 + 这个组合目前只出现在内容过滤上（模型无权限是 400「无效模型id」）。
         //   宁可多给一句「进群」，也不要把人甩回宿主那句「API 密钥无效」。
         if (response.status === 403 && /非法请求|permission_error/i.test(text)) {
+          // 兜底：白名单救不了的（用户改过首句 / 新客户端 / 没见过的写法），
+          // 换一句不含任何 agent 产品名的首行重试一次。宁可多打一次，也别把人卡死在 403。
+          if (firstLine.mode === "blocked" && requestJson) {
+            const retried = await retryWithFallbackFirstLine(requestJson)
+            if (retried) return retried
+          }
           return errorResponse(403, "content_filtered", CONTENT_FILTER_HINT)
         }
         // 其余原样透出

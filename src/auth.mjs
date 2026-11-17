@@ -11,7 +11,7 @@ import { refreshHook } from "./hooks/refresh.mjs"
 import { loaderHook } from "./hooks/loader.mjs"
 import { usageHook } from "./hooks/usage.mjs"
 
-export function authHooks() {
+export function authHooks(options = {}) {
   return {
     provider: PROVIDER,
     icon: ICON,
@@ -19,7 +19,7 @@ export function authHooks() {
     refreshLead: REFRESH_LEAD_MS,
     methods: methods(),
     refresh: refreshHook(),
-    loader: loaderHook(),
+    loader: loaderHook(options),
     usage: usageHook(),
   }
 }
