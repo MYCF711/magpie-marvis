@@ -102,6 +102,24 @@ magpie plugin add MYCF711/magpie-marvis
 - **`/v1/chat/completions` 不需要 UAL 签名**：那是 `/v3/*` 业务接口的事。把签名头加到模型
   网关上会从 `403 风控` 变成 `401 登录态过期`。
 
+## 首行改写（面板里直接改，不用手写 JSON）
+
+被上游内容过滤拦下（403 `非法请求`）时，插件会对 system 提示词的**第一句**做处理。设置入口有两处，
+改的是同一份选项 `firstLine`：
+
+- **provider 编辑器里的「首行改写」面板**（`magpie.panels`，本插件声明的）：一个下拉 + 一个输入框，
+  改完自动保存，不用记 JSON。
+- 插件行上的 **Options**（magpie 内置的 JSON 编辑框）：`{"firstLine": {"mode": "blocked", "text": ""}}`
+
+| mode | 行为 |
+| --- | --- |
+| `off` | 只走内置白名单（已知客户端的默认首句），不做兜底 |
+| `blocked`（默认） | 先按原样发；被 403 拦下时把首行换成兜底句**重试一次** |
+| `always` | 每个请求都把首行换成 `text` |
+
+`text` 留空 = 内置兜底 `You are a helpful assistant.`（不含任何 agent 产品名）。
+换掉的只是 system 消息的**第一行**，第二行起原样；改写是幂等的，前缀缓存不会反复失效。
+
 ## 你的号被降级了没有？跑一条命令
 
 auto 家族（`main-auto` / `file-auto` / `computer-auto` / `browser-auto`）在服务端是**按账号**改路由的：

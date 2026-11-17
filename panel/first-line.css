@@ -1,0 +1,58 @@
+/* 首行改写面板 —— 只摆位置，颜色/字体/输入框全交给 bridge 的 :where() 基础样式，
+   这样深色/浅色和语言切换自动跟随 magpie，不需要我们自己维护一套主题。 */
+
+.fl {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 0 4px;
+}
+
+.fl h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fl .muted {
+  margin: 0;
+  font-size: 12px;
+  color: var(--magpie-muted, #888);
+  line-height: 1.5;
+}
+
+.fl-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.fl-row label {
+  flex: 0 0 72px;
+  font-size: 12px;
+  color: var(--magpie-fg-2, inherit);
+}
+
+.fl-row select,
+.fl-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  border: 1px solid var(--magpie-line, #3a3a3a);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
+
+.fl-row input::placeholder {
+  color: var(--magpie-faint, #777);
+}
+
+.fl-status {
+  margin: 0;
+  min-height: 16px;
+  font-size: 11px;
+  color: var(--magpie-green, #3ba55d);
+}
