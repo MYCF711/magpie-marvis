@@ -9,7 +9,7 @@
 // ⚠ 实测：把 UAL 签名头（md5 body+ts+accessKey+nonce）加到模型网关上是**错的** ——
 //   会从 403 风控变成 401 登录态过期。那套只用于 /v3/*。
 
-import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, PROVIDER, canonicalModelId, isUnavailableModel } from "../context.mjs"
+import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, PROVIDER, canonicalModelId, isUnavailableModel, FIRST_LINE_OPTION_KEY } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
 import { normalizeTools } from "../marvis/tool-schema.mjs"
 import { InvalidImageError, normalizeMessages } from "../marvis/images.mjs"
@@ -161,8 +161,14 @@ function firstLineOption(input, options) {
       opts = {}
     }
   }
-  // 新形状：{"text": "…"}；老形状：{"firstLine": {"text": "…"}}（0.2.49 及以前）
-  const raw = typeof opts?.text === "string" ? opts : opts?.firstLine
+  // 新形状：{"提示词首行替换": "…"}（键名就是给人看的字段名）；
+  // 0.2.50 用的是 {"text": "…"}，0.2.49 及以前是 {"firstLine": {"text": "…"}} —— 都还读
+  const raw =
+    typeof opts?.[FIRST_LINE_OPTION_KEY] === "string"
+      ? { text: opts[FIRST_LINE_OPTION_KEY] }
+      : typeof opts?.text === "string"
+        ? opts
+        : opts?.firstLine
   const text =
     typeof raw?.text === "string" && raw.text.trim()
       ? raw.text.trim().replace(/\s*\n\s*/g, " ")

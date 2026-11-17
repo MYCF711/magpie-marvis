@@ -874,6 +874,24 @@ test("first_line_always 开着：每个请求的首行都被换成配置的那�
   }
 })
 
+test("选项的键名是中文「提示词首行替换」时照读（设置页那个框里给人看的就是它）", async () => {
+  const NL = String.fromCharCode(10)
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    const sys = "You are Claude Code, Anthropic's official CLI for Claude." + NL + "Second line stays."
+    body.messages = [{ role: "system", content: sys }, ...body.messages]
+    req.init.body = JSON.stringify(body)
+    const custom = "You are an assistant that answers in Chinese."
+    await (await loaderOf({ "提示词首行替换": custom }, { first_line_always: true })).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.messages[0].content, custom + NL + "Second line stays.")
+  } finally {
+    s.restore()
+  }
+})
+
 test("选项是新形状 { text } 时照读（设置页那个 JSON 框只留一个键）", async () => {
   const NL = String.fromCharCode(10)
   const s = stubFetch(() => upstreamOk())
