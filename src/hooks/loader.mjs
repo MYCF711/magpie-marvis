@@ -9,7 +9,7 @@
 // ⚠ 实测：把 UAL 签名头（md5 body+ts+accessKey+nonce）加到模型网关上是**错的** ——
 //   会从 403 风控变成 401 登录态过期。那套只用于 /v3/*。
 
-import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, canonicalModelId, isUnavailableModel } from "../context.mjs"
+import { BASE_V1, DEFAULT_MODEL, DISPLAY_BY_SLOT, PROVIDER, canonicalModelId, isUnavailableModel } from "../context.mjs"
 import { llmHeaders } from "../marvis/protocol.mjs"
 import { normalizeTools } from "../marvis/tool-schema.mjs"
 import { InvalidImageError, normalizeMessages } from "../marvis/images.mjs"
@@ -123,27 +123,33 @@ const CONTENT_FILTER_HINT =
 // 兜底句不含任何 agent 产品名（`You are a helpful assistant.` 实测 200），
 // 它能过；代价是模型不知道自己是哪个客户端，所以**默认只在被拦之后才用**（mode=blocked）。
 //
-// mode 三种：
-//   off     只走白名单，不做兜底（行为与 0.2.41 一致）
-//   blocked 先按原样发；403 非法请求时**换兜底首行重试一次**（默认）
-//   always  每个请求都把首行换成 text（用户明确要求时用；前缀会一次性变化，之后稳定）
+// 两个开关由 **magpie 渲染在供应商卡片里**（`auth.options`，见 context.mjs 的 PLUGIN_OPTIONS），
+// 用户在编辑器里点 Off/On 即生效，插件用 `input.magpie.option("marvis", key)` 读，
+// **不用重启**（magpie 每次调用都现读）：
 //
-// text 留空 = 用内置兜底句。整行替换：只换 system 消息的第一行，第二行起原样。
+//   first_line_fallback（默认开）被拦时换兜底句重试一次 → blocked
+//   first_line_always  （默认关）每个请求都换首行        → always
+//   两个都关                                            → off（只走白名单）
+//
+// 首行文本来自插件选项的 JSON（`magpie.options.firstLine.text`，设置页里手写）：
+// 留空 = 内置兜底句。整行替换：只换 system 消息的第一行，第二行起原样。
 
 /** 内置兜底首行：不含任何 agent 产品名（实测 200） */
 const FALLBACK_FIRST_LINE = "You are a helpful assistant."
 
-const FIRST_LINE_MODES = new Set(["off", "blocked", "always"])
 
 /**
- * 从插件选项里读 firstLine 配置。选项来自 magpie 设置页的 JSON（`magpie.options` 是默认值）。
- * 任何形状不对的值都退回默认（blocked + 内置兜底句），绝不因为配置写错而让请求失败。
+ * 读一次「首行改写」配置。
  *
- * @param {unknown} options
+ * 开关从 magpie 现读（`input.magpie.option(provider, key)`，用户点一下就到，不用重启）；
+ * 文本从插件选项的 JSON 读（`magpie.options.firstLine.text`）。任何形状不对的值都退回默认
+ * （fallback 开 + 内置兜底句），绝不因为配置写错而让请求失败。
+ *
+ * @param {unknown} input   magpie 给插件的 input（`input.magpie.option` 在里面）
+ * @param {unknown} options 插件选项（设置页那个 JSON）
  * @returns {{ mode: "off" | "blocked" | "always", text: string }}
  */
-function firstLineOption(options) {
-  // 宿主可能把选项当 JSON 文本传（设置页就是文本框），两种形状都认
+function firstLineOption(input, options) {
   let opts = options
   if (typeof opts === "string") {
     try {
@@ -153,8 +159,22 @@ function firstLineOption(options) {
     }
   }
   const raw = opts?.firstLine
-  const mode = FIRST_LINE_MODES.has(raw?.mode) ? raw.mode : "blocked"
-  const text = typeof raw?.text === "string" && raw.text.trim() ? raw.text.trim().replace(/\s*\n\s*/g, " ") : FALLBACK_FIRST_LINE
+  const text =
+    typeof raw?.text === "string" && raw.text.trim()
+      ? raw.text.trim().replace(/\s*\n\s*/g, " ")
+      : FALLBACK_FIRST_LINE
+  // 开关：用户的值 → 插件默认。读不到（老 magpie / 抛错）就当默认
+  const switched = (key, fallback) => {
+    try {
+      const v = input?.magpie?.option?.(PROVIDER, key)
+      return typeof v === "boolean" ? v : fallback
+    } catch {
+      return fallback
+    }
+  }
+  const always = switched("first_line_always", false)
+  const blocked = switched("first_line_fallback", true)
+  const mode = always ? "always" : blocked ? "blocked" : "off"
   return { mode, text }
 }
 
@@ -322,9 +342,7 @@ function credsOf(auth) {
   }
 }
 
-export function loaderHook(options = {}) {
-  // 选项在钩子装配时读一次；改了插件选项，magpie 会重建插件（与其它钩子一致）
-  const firstLine = firstLineOption(options)
+export function loaderHook(input, options = {}) {
   return async (getAuth) => {
     const auth = await getAuth()
     const creds = credsOf(auth)
@@ -335,12 +353,14 @@ export function loaderHook(options = {}) {
     return {
       baseURL: BASE_V1,
       apiKey: "placeholder",
-      fetch: async (input, init) => {
-        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+      fetch: async (target, init) => {
+        // ⚠ 每次请求都现读开关：magpie 的 option() 本来就是现查的，改了立刻生效
+        const firstLine = firstLineOption(input, options)
+        const url = typeof target === "string" ? target : target instanceof URL ? target.href : target.url
 
         // 非补全请求（/models 之类）原样放行 —— 上游没有这个端点，交给上层兜底
         if (!/\/chat\/completions\b/.test(url)) {
-          return fetch(input, init)
+          return fetch(target, init)
         }
 
         /**

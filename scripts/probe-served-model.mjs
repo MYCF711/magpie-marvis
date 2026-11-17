@@ -20,7 +20,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 
 import { llmHeaders } from "../src/marvis/protocol.mjs"
-import { BASE_V1, expectedServedModel } from "../src/context.mjs"
+import { BASE_V1, DISPLAY_BY_SLOT, expectedServedModel } from "../src/context.mjs"
 
 const DEFAULT_SLOTS = ["main-auto", "deepseek-v4-pro-external"]
 const TIMEOUT_MS = 60_000
@@ -123,7 +123,9 @@ if (list.length === 0) {
 const rows = []
 for (const { accountId, acct } of list) {
   for (const slot of args.slots) {
-    const declared = expectedServedModel(slot)
+    // 没在 TABLE 里声明的槽位（file-auto / app-auto …）没有「应该服务什么」可言：
+    // 它们由服务端按槽位固定映射，实测是唯一判据 —— 别拿槽位名当期望值，否则全是假报警。
+    const declared = slot in DISPLAY_BY_SLOT ? expectedServedModel(slot) : null
     let r
     try {
       r = await servedModel(acct, slot)
@@ -136,7 +138,7 @@ for (const { accountId, acct } of list) {
       declared,
       served: r.served,
       status: r.status,
-      ok: Boolean(r.served) && r.served === declared,
+      ok: declared === null ? Boolean(r.served) : Boolean(r.served) && r.served === declared,
       error: r.error,
     })
   }
@@ -149,10 +151,11 @@ if (args.json) {
 } else {
   console.log(`\n探针 · marvis 账号实际服务模型（绕开 magpie 直连上游）\n`)
   for (const r of rows) {
-    const mark = r.ok ? "✅" : r.served ? "⚠️ " : "❌"
+    const mark = r.declared === null ? "ℹ️ " : r.ok ? "✅" : r.served ? "⚠️ " : "❌"
     const got = r.served ?? `(HTTP ${r.status || "-"}${r.error ? " " + r.error : ""})`
-    console.log(`${mark} ${r.account.padEnd(18)} ${r.slot.padEnd(26)} 声明 ${r.declared.padEnd(38)} 实服务 ${got}`)
-    if (!r.ok && r.served) {
+    const want = r.declared === null ? "（未声明，只看实测）" : r.declared
+    console.log(`${mark} ${r.account.padEnd(18)} ${r.slot.padEnd(26)} 声明 ${want.padEnd(38)} 实服务 ${got}`)
+    if (r.declared !== null && !r.ok && r.served) {
       console.log(`     ↳ 这个号被路由到了别的快照：${r.served}（不是声明里的 ${r.declared}）`)
       console.log(`       要拿回声明的模型，改用防降级槽位：deepseek-v4-pro-external`)
     }
