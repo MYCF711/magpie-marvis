@@ -236,6 +236,30 @@ test("TABLE 里 8 条槽位 / 显示名 / 旧下标全部放行（当前正常�
 // ③ 上游错误码分类：4130001 / 无效模型id → 404；5104002 不许全局 404
 // ─────────────────────────────────────────────────────────────
 
+test("发给上游的 UA 必须是 Marvis agent 自己的那个（三形状都不许被 magpie 的 UA 拼上去）", async () => {
+  // 模型网关只认 AsyncOpenAI/Python 2.32.0；带上 magpie 的 UA 会变成
+  // "magpie/0.1.4342, AsyncOpenAI/Python 2.32.0"（Headers 对同名头用逗号连接），既不是官方 UA，
+  // 也可能被当成伪造头触发 4100404 风控。
+  const shapes = () => [
+    { "content-type": "application/json", "user-agent": "magpie/0.1.4342" },
+    { "content-type": "application/json", "User-Agent": "magpie/0.1.4342" },
+    new Headers({ "content-type": "application/json", "user-agent": "magpie/0.1.4342" }),
+    [["content-type", "application/json"], ["user-agent", "magpie/0.1.4342"]],
+  ]
+  for (const headers of shapes()) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      await (await loaderOf()).fetch(req.url, { ...req.init, headers })
+      const sent = new Headers(s.calls[0].init.headers)
+      assert.equal(sent.get("user-agent"), "AsyncOpenAI/Python 2.32.0", "UA 只能是官方那一个，不许拼接")
+      assert.equal(sent.get("content-type"), "application/json", "其余头照原样保留")
+    } finally {
+      s.restore()
+    }
+  }
+})
+
 test("上游 4130001（无效模型id）→ 404 model_unavailable，不打死账号", async () => {
   const s = stubFetch(() => upstreamError(400, { code: 4130001, msg: "invalid request" }))
   try {

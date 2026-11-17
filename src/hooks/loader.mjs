@@ -383,9 +383,29 @@ export function loaderHook(input, options = {}) {
           } catch (err) {
             throw new HeaderUnavailable(err?.message ?? String(err))
           }
-          // 保留调用方传的 stream / 业务体，只换鉴权头
-          const merged = { ...(init?.headers ?? {}) }
-          for (const [k, v] of Object.entries(headers)) merged[k] = v
+          // 保留调用方传的 stream / 业务体，只换鉴权头。
+          // ⚠ 必须**按小写判重**：magpie 传进来的头是普通对象、键的大小写不固定
+          //   （`user-agent` 与 `User-Agent` 同时存在时，Headers 会把两条**用逗号连起来**，
+          //   于是上游收到 `magpie/0.1.4342, AsyncOpenAI/Python 2.32.0` —— 既不是官方 UA，
+          //   也可能被当成伪造头触发 4100404 风控）。
+          const oursLower = new Set(Object.keys(headers).map((k) => k.toLowerCase()))
+          const merged = {}
+          const incoming = init?.headers
+          if (incoming && typeof incoming.forEach === "function" && !Array.isArray(incoming)) {
+            // Headers 实例
+            incoming.forEach((value, key) => {
+              if (!oursLower.has(String(key).toLowerCase())) merged[key] = value
+            })
+          } else if (Array.isArray(incoming)) {
+            for (const [key, value] of incoming) {
+              if (!oursLower.has(String(key).toLowerCase())) merged[key] = value
+            }
+          } else {
+            for (const [key, value] of Object.entries(incoming ?? {})) {
+              if (!oursLower.has(String(key).toLowerCase())) merged[key] = value
+            }
+          }
+          Object.assign(merged, headers)
           if (payload !== init?.body) {
             // body 变了，长度 / 压缩头必须去掉，让 fetch 重新算
             delete merged["content-length"]
