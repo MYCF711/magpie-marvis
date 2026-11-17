@@ -164,9 +164,9 @@ export const PLUGIN_OPTIONS = Object.freeze([
     label: "Rewrite the first line when the upstream refuses it",
     labels: { zh: "被上游拒绝时改写首行", "zh-TW": "被上游拒絕時改寫首行" },
     description:
-      "A request refused as a content-filter hit (403 非法请求) is sent once more with its system first line replaced. Healthy requests are not touched.",
+      "Refused as a content-filter hit (403)? Resent once with its system first line rewritten; healthy requests untouched.",
     descriptions: {
-      zh: "被上游按内容过滤拦下（403 非法请求）的请求，会把 system 首行换成兜底句再发一次；正常请求一个字节都不改。",
+      zh: "被上游内容过滤拦下（403）时，改写 system 首行再发一次；正常请求不动。",
     },
     default: true,
     placement: "top",
@@ -176,9 +176,9 @@ export const PLUGIN_OPTIONS = Object.freeze([
     label: "Rewrite the first line of every request",
     labels: { zh: "每个请求都改写首行" },
     description:
-      "Every request gets its system first line replaced by the one in the plugin's options (or the built-in fallback). Use it for clients whose prompt cannot be changed at all.",
+      "Every request's system first line is replaced by the text below. Empty = the built-in fallback.",
     descriptions: {
-      zh: "每个请求都把 system 首行换成插件选项里那句（留空 = 内置 You are a helpful assistant.）。用于提示词根本改不了的客户端。",
+      zh: "每个请求的 system 首行都换掉，用下方面板里那句；留空 = 内置兜底句。",
     },
     default: false,
     placement: "top",
