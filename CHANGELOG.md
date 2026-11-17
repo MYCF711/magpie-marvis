@@ -3,6 +3,20 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.39 — 2026-11-17
+
+**修复（ZCode 的身份句没被覆盖，整个客户端 403）**
+
+- 2026-11-17 实测（同一分钟、只换 system 首行）：`You are ZCode, …` / `You are ZCode.` → 403，
+  `You are Z-Code, …` → 200，`You are Zed, …` / `You are a helpful assistant.` → 200
+  —— 这条的判据仍是字面量 `ZCode`，插连字符有效（**与 0.2.38 那条 DSH 的结论不是一回事**，别混）
+- `IDENTITY_PHRASES` 补 `You are ZCode → You are Z-Code`，`IDENTITY_PHRASE_TEST` 同步补
+  `You are\s+ZCode\b`；ZCode 的系统提示词**不可配置**，插件不改写就等于这个客户端完全不能用（issue #38）
+- 403 文案改成「常见身份句插件已自动改写；仍被拦说明这句还没覆盖，把首行带到群里」——
+  原来只教 `powered by → running in`，对 ZCode 这类提示词改不动的客户端是空建议
+- 新增 4 个用例：长短两种 ZCode 写法改写 / 无关首句不误伤 / 已写成 `Z-Code` 不再动 / 诊断与改写同集合
+- 验收：测试 165 项中 161 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过
+
 ## 0.2.38 — 2026-11-16
 
 **修复（连字符形态失效，改成换句式；报错文案写明根因与修法）**

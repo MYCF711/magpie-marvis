@@ -53,25 +53,33 @@ const IDENTITY_PHRASES = [
   [/(You are an AI agent) powered by (DeepSeek)\s+(Harness)/i, "$1 running in $2 $3"],
   [/(You are a coding agent running in the Codex)\s+(CLI)/i, "$1-$2"],
   [/(You are Claude)\s+(Code, Anthropic's official CLI for Claude)/i, "$1-$2"],
+  // ⚠ 2026-11-17（issue #38，ZCode 3.18.2）：连字符在这条上**仍然有效**，实测
+  //   `You are ZCode…` / `You are ZCode.` → 403，`You are Z-Code…` → 200，
+  //   同一分钟的 `You are Zed…` / `You are a helpful assistant.` → 200。
+  //   所以这里继续用「插连字符」而不是换句式：上游对 ZCode 的判据还是字面量 `ZCode`。
+  [/(You are)\s+(ZCode)\b/i, "$1 Z-Code"],
   [/(你是一个由\s*DeepSeek)\s+(Harness)/i, "$1-$2"],
 ]
 
 /** 判定用（只看原文，不参与改写）：命中任一条即认为这次 403 是内容过滤 */
 const IDENTITY_PHRASE_TEST =
-  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent running in the Codex\s+CLI|You are Claude\s+Code|你是一个由\s*DeepSeek\s+Harness/i
+  /You are an AI agent powered by DeepSeek\s+Harness|You are a coding agent running in the Codex\s+CLI|You are Claude\s+Code|You are\s+ZCode\b|你是一个由\s*DeepSeek\s+Harness/i
 
 /**
- * 上游内容过滤拦截时的**统一**提示。
+ * 上游内容过滤拦截时的**统一**提示（本插件自己的 403 文案，不发给上游）。
  *
- * ⚠ 刻意**不点名**任何 agent / 身份句 —— 被拦的可能有很多家（DSH、Codex、Claude Desktop，
- *   以及还没测到的），写死一家会在别家命中时把人带偏。只留两件确定的事：
- *   ① 性质是内容过滤，不是密钥或登录；② 修复方法在群里。
+ * ⚠ 覆盖的是「**已知会被改写 + 仍被拦**」这一种状态，措辞必须同时成立三件事：
+ *   ① 性质是内容过滤，不是密钥或登录（否则用户去重登，白折腾）；
+ *   ② 说明这件事客户端多半不用管 —— 常见身份句插件已经替他改了；
+ *   ③ 给出「还没覆盖」时的上报动作（把首行带到群里），并留一条 DSH 的手工改法。
+ * ⚠ 不要把「改哪一句」写死成唯一修法：不同客户端首句不同（issue #38 的 ZCode 提示词不可配置，
+ *   用户侧根本没有可改的地方），写死一家会在别家命中时把人带偏。
  */
 const CONTENT_FILTER_HINT =
   "上游内容过滤拦截：系统提示词首句被当成身份指纹（不是密钥或登录问题）。" +
-  "修法：把首句里的 `powered by` 改成 `running in`，例如 " +
-  "`You are an AI agent running in DeepSeek Harness.`（实测放行）。" +
-  "其它 agent 的现成修法见 QQ 群 451129479。"
+  "已知的几种身份句（DSH / Codex / Claude Code / ZCode）会在本插件里自动改成能放行的形态，" +
+  "客户端不用做任何配置。仍然被拦说明这句还没覆盖 —— 把 system 首行原样带到 QQ 群 451129479，" +
+  "加一条规则就能修。DSH 的手工改法：首句里的 `powered by` 改成 `running in`（实测放行）。"
 
 /**
  * 构造一个错误 Response。
