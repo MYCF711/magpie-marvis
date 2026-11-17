@@ -3,6 +3,14 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.56 — 2026-11-17
+
+**修（发给上游的 UA 可能变成 `magpie/0.1.4342, AsyncOpenAI/Python 2.32.0`）**
+
+- 模型网关要求 UA 是 Marvis agent 自己的 `AsyncOpenAI/Python 2.32.0`（换成浏览器/magpie 的 UA 会被 4100404 风控）
+- 合并 magpie 传进来的头时按**原样**赋值，magpie 若用小写 `user-agent` 传自己的 UA，两处同名头会被 Headers 用逗号连成一条
+- 改成**按小写判重**后再覆盖（Headers 实例 / 键值数组 / 普通对象三种形状都处理），本次实测三种形状的最终 UA 都是 `AsyncOpenAI/Python 2.32.0`
+
 ## 0.2.55 — 2026-11-17
 
 **改（内置兜底首行换成 Marvis 自己的首句）**
