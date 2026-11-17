@@ -102,6 +102,25 @@ magpie plugin add MYCF711/magpie-marvis
 - **`/v1/chat/completions` 不需要 UAL 签名**：那是 `/v3/*` 业务接口的事。把签名头加到模型
   网关上会从 `403 风控` 变成 `401 登录态过期`。
 
+## 你的号被降级了没有？跑一条命令
+
+auto 家族（`main-auto` / `file-auto` / `computer-auto` / `browser-auto`）在服务端是**按账号**改路由的：
+同一个槽位，A 号可能服务 `deepseek-v4-1-flash-261017`，B 号被换到某个**旧快照**。
+
+⚠ **旧快照的名字不固定** —— 已知出现过 `deepseek-v4-flash-ga-260731`（issue #13）、
+`deepseek-v4-flash-202605`（issue #43）。所以别记名字、也别信槽位名，
+**只认响应体里的 `model` 字段**：
+
+```bash
+node scripts/probe-served-model.mjs          # 每个账号 × main-auto / 防降级槽位，各打一次
+node scripts/probe-served-model.mjs --json   # 机器可读；退出码 2 = 有号被路由到别的快照
+```
+
+它绕开 magpie、直接用插件自己的 `llmHeaders()` 打上游（供应商关着也能跑），只读本机账号文件、不改任何配置。
+
+被降级了怎么办：**换 `deepseek-v4-pro-external`（卡片上的 `deepseek-v4-1-flash-261017-antidowngrade`）** ——
+那条是固定映射，不受账号级改路由影响。名字里的 `-antidowngrade` 只是显示后缀，上游回的仍是 `261017`。
+
 ## 开发
 
 ```bash
