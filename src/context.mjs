@@ -110,6 +110,11 @@ const TABLE = [
   //   留这条的理由：auto 家族（main-auto / file-auto / computer-auto / browser-auto）
   //   在服务端是**按账号**改路由的，这条固定映射不受影响 —— 账号被改路由时它是可用的替代槽位。
   //
+  // ⚠ 2026-11-17（issue #43）：被改路由的号会落到**某个旧快照**，而旧快照的名字**不固定** ——
+  //   已知出现过 `deepseek-v4-flash-ga-260731`（#13）与 `deepseek-v4-flash-202605`（#43）。
+  //   所以别把任何具体名字写死成「降级落点」；判定只认响应体里的 `model`，
+  //   自查用 `node scripts/probe-served-model.mjs`。
+  //
   // ⚠ 2026-11-15：后缀**必须是纯 ASCII、不能有空格与全角括号**（此前用的是 ` (防降级)`）。
   //   用户实测在 VS Code Copilot 里选它会在回复阶段一直卡住（DSH 下同一条正常，见 issue #15）——
   //   模型名带空格/中文在客户端那一层会被拿去做 header 或 URL 处理，非 ASCII 会出问题。
@@ -137,6 +142,23 @@ const TABLE = [
 export const MODEL_ALIASES = Object.freeze(
   Object.fromEntries(TABLE.map(([id], index) => [String(index), id])),
 )
+
+/**
+ * 槽位「应该」服务哪个上游模型名 —— 自查探针与测试共用。
+ *
+ * ⚠ 不能直接拿 `DISPLAY_BY_SLOT` 比：显示名里有**我们加的后缀**
+ *   （`deepseek-v4-1-flash-261017-antidowngrade`），而上游回的 model 一直是
+ *   `deepseek-v4-1-flash-261017`。后缀只是 UI 标记，剥掉才是上游名字。
+ *
+ * @param {string} slot
+ * @returns {string}
+ */
+export const OURS_DISPLAY_SUFFIX = "-antidowngrade"
+
+export function expectedServedModel(slot) {
+  const display = DISPLAY_BY_SLOT[slot] ?? slot
+  return display.endsWith(OURS_DISPLAY_SUFFIX) ? display.slice(0, -OURS_DISPLAY_SUFFIX.length) : display
+}
 
 /** 槽位名 → 卡片/路由上显示的真实模型名 */
 export const DISPLAY_BY_SLOT = Object.freeze(
