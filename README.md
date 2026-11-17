@@ -110,6 +110,11 @@ magpie plugin add MYCF711/magpie-marvis
 - **provider 编辑器里的「首行改写」面板**（`magpie.panels`，本插件声明的）：一个下拉 + 一个输入框，
   改完自动保存，不用记 JSON。
 - 插件行上的 **Options**（magpie 内置的 JSON 编辑框）：`{"firstLine": {"mode": "blocked", "text": ""}}`
+  —— 这是**插件级**选项，所有 provider 共用
+
+> ⚠ **面板不会立刻出现**：magpie 的窗口只在启动时（以及你在 GUI 里做插件操作后）拉一次面板清单。
+> 用命令行 `magpie plugin update` 更新之后，需要在窗口里按 **Ctrl+R** 或关掉窗口重开，面板才会出现。
+> 位置在 provider 编辑器的**取消 / 保存按钮上方**，标题「首行改写 / First line」。
 
 | mode | 行为 |
 | --- | --- |
