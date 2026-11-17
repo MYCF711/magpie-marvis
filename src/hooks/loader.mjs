@@ -131,7 +131,10 @@ const CONTENT_FILTER_HINT =
 //   first_line_always  （默认关）每个请求都换首行        → always
 //   两个都关                                            → off（只走白名单）
 //
-// 首行文本来自插件选项的 JSON（`magpie.options.firstLine.text`，设置页里手写）：
+// 首行文本来自插件选项的 JSON，**就一个键**（`magpie.options` = `{"text": "…"}`）：
+// 设置 → 插件 → 本插件那一行的「选项」框里直接改那句话。只留一个键是有意的 ——
+// 那个框是 magpie 的通用 JSON 编辑器（值必须是对象，写字符串会被拒），键越少越好改。
+// 老版本存下的 `{ "firstLine": { "text": "…", "mode": "…" } }` 仍然读。
 // 留空 = 内置兜底句。整行替换：只换 system 消息的第一行，第二行起原样。
 
 /** 内置兜底首行：不含任何 agent 产品名（实测 200） */
@@ -158,7 +161,8 @@ function firstLineOption(input, options) {
       opts = {}
     }
   }
-  const raw = opts?.firstLine
+  // 新形状：{"text": "…"}；老形状：{"firstLine": {"text": "…"}}（0.2.49 及以前）
+  const raw = typeof opts?.text === "string" ? opts : opts?.firstLine
   const text =
     typeof raw?.text === "string" && raw.text.trim()
       ? raw.text.trim().replace(/\s*\n\s*/g, " ")
