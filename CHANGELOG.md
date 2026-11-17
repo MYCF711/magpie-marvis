@@ -3,6 +3,17 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.55 — 2026-11-17
+
+**改（内置兜底首行换成 Marvis 自己的首句）**
+
+- 默认首行 `You are a helpful assistant.` → `You are Marvis, Tencent's AI assistant.`：
+  前者用的人太多，2026-11-17 实测已被上游 403；用厂商自己的身份句，黑名单不会反噬它自己的产品
+- 同一批直打实测（只换 system 首行，其余不变）：
+  `You are a helpful assistant.` → **403**；
+  `You are Marvis, Tencent's AI assistant.` / `You are Marvis.` / `You are an AI assistant.` / `你是腾讯 Marvis 智能助手。` → **200**
+- 这个句子只是**默认值**：`提示词首行替换` 留空时才用，用户写了就用用户的
+
 ## 0.2.54 — 2026-11-17
 
 **修（首行改写只认 chat 的 `messages[]`：Anthropic / Responses 协议下等于空操作，issue #62 —— 由 @zhey80 用 `up_bytes` 差值定位）**

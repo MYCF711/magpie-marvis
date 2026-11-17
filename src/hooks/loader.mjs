@@ -69,7 +69,7 @@ const CONTENT_FILTER_HINT =
 // 为什么要有它：上游拦的是「system 首行里的身份词对」，而**哪句能过一直在变** ——
 // 我们把一句句首行加进白名单，换来的是它们很快也被拦。所以不再替用户猜：
 // 首行由用户自己写（选项「提示词首行替换」），插件只负责把它写进去。
-// 兜底句不含任何 agent 产品名（`You are an AI assistant.` 实测 200），
+// 兜底句不含任何 agent 产品名（`You are Marvis, Tencent's AI assistant.` 实测 200），
 // 它能过；代价是模型不知道自己是哪个客户端，所以**默认只在被拦之后才用**（mode=blocked）。
 //
 // 两个开关由 **magpie 渲染在供应商卡片里**（`auth.options`，见 context.mjs 的 PLUGIN_OPTIONS），
@@ -87,7 +87,7 @@ const CONTENT_FILTER_HINT =
 // 留空 = 内置兜底句。整行替换：只换 system 消息的第一行，第二行起原样。
 
 /** 内置兜底首行：不含任何 agent 产品名（实测 200） */
-const FALLBACK_FIRST_LINE = "You are an AI assistant."
+const FALLBACK_FIRST_LINE = "You are Marvis, Tencent's AI assistant."
 
 
 /**
