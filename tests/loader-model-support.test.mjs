@@ -527,6 +527,78 @@ test("已经改成「拆主语」形态的请求 → 一个字节都不改（幂
     }
   }
 })
+test("句末标点归一：`…Claude` / `…Claude.` / `…Claude!` 视作同一句", async () => {
+  const cases = [
+    ["You are Claude", "You are an agent, Claude."],
+    ["You are Claude.", "You are an agent, Claude."],
+    ["You are Claude!", "You are an agent, Claude."],
+  ]
+  for (const [input, expected] of cases) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: input }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, expected)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("用户自己改过的首句（不在白名单里）→ 一个字节都不动", async () => {
+  // 用户可能已经按群里/旧建议手改过首句，或客户端自己换了措辞。
+  // 这类请求改了也不一定对，还可能和他的改动打架、让前缀缓存反复失效 ⇒ 只诊断，不改写。
+  const custom = [
+    "You are Claude, my pair-programming buddy. Be concise.",
+    "You are Claude Code, Anthropic's official CLI for Claude — but with our house rules.",
+    "You are a coding agent running in the Codex CLI, a terminal-based coding assistant, for Acme Corp.",
+    "You are ZCode, a helpful coding assistant for our monorepo.",
+  ]
+  for (const text of custom) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: text }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, text, `改过的首句不许动：${text.slice(0, 40)}…`)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("白名单替换只动第一句，行内其余内容与后续行原样", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      {
+        role: "system",
+        content:
+          "You are Claude Code, Anthropic's official CLI for Claude. Second sentence stays.\nSecond line stays too.",
+      },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(
+      sent.messages[0].content,
+      "You are an agent, Claude Code, Anthropic's official CLI for Claude. Second sentence stays.\nSecond line stays too.",
+    )
+  } finally {
+    s.restore()
+  }
+})
+
 // ─────────────────────────────────────────────────────────────
 // ZCode 身份句（issue #38，2026-11-17 直打上游实测）
 //   `You are ZCode, an interactive agent working with the user toward their goals.` → 403
@@ -618,7 +690,7 @@ test("ZCode 身份句被拦时也要给 content_filtered 诊断（诊断集合�
 //   （宿主再翻成「API 密钥无效」）—— 这就是本条用例要锁住的回归。
 // ─────────────────────────────────────────────────────────────
 
-test("中文身份句写在 system 首行 → 自动改写，且 403 改判成 content_filtered", async () => {
+test("中文身份句：实测原样就 200 ⇒ 白名单里没有它，一个字节都不改", async () => {
   const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -627,7 +699,11 @@ test("中文身份句写在 system 首行 → 自动改写，且 403 改判成 c
     req.init.body = JSON.stringify(body)
     const res = await (await loaderOf()).fetch(req.url, req.init)
     const sent = JSON.parse(s.calls[0].init.body)
-    assert.equal(sent.messages[0].content, "你是一个由 DeepSeek-Harness 驱动的 AI 智能体。", "中文写法同样要把词间空格换成连字符")
+    assert.equal(
+      sent.messages[0].content,
+      "你是一个由 DeepSeek Harness 驱动的 AI 智能体。",
+      "2026-11-17 复测：中文原句直接 200，不改写（改了反而让前缀无谓变化、缓存失效）",
+    )
     assert.equal(res.status, 403)
     assert.equal((await res.json()).error.code, "content_filtered", "中文写法不许退化成原始 403")
   } finally {
@@ -658,21 +734,24 @@ test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节
   }
 })
 
-test("全小写 / 句末加感叹号的身份句照样会被拦，也照样要改写", async () => {
+test("白名单是整句精确匹配：大小写 / 句内改词都不改（宁可漏，不可错改）", async () => {
+  // 客户端的默认首句是固定字符串；改过大小写或改了几个词 = 用户自己动过 ⇒ 不在插件范围内。
+  // 只有「句末标点」在归一范围内（`…Claude` / `…Claude.` / `…Claude!` 视作同一句）。
   const variants = [
-    ["you are an ai agent powered by deepseek harness.", "you are an ai agent running in deepseek harness."],
-    ["You are an AI agent powered by DeepSeek Harness!", "You are an AI agent running in DeepSeek Harness!"],
+    "you are an ai agent powered by deepseek harness.",
+    "YOU ARE CLAUDE CODE.",
+    "You are Claude Code, Anthropic's official CLI.",
   ]
-  for (const [input, expected] of variants) {
+  for (const text of variants) {
     const s = stubFetch(() => upstreamOk())
     try {
       const req = requestFor("deepseek-v4-1-flash-261017")
       const body = JSON.parse(req.init.body)
-      body.messages = [{ role: "system", content: input }, ...body.messages]
+      body.messages = [{ role: "system", content: text }, ...body.messages]
       req.init.body = JSON.stringify(body)
       await (await loaderOf()).fetch(req.url, req.init)
       const sent = JSON.parse(s.calls[0].init.body)
-      assert.equal(sent.messages[0].content, expected)
+      assert.equal(sent.messages[0].content, text, `非默认写法一律不动：${text.slice(0, 32)}…`)
     } finally {
       s.restore()
     }
