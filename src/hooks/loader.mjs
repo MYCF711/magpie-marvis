@@ -541,7 +541,14 @@ export function loaderHook(input, options = {}) {
         }
         if (RISK_BLOCK.test(text)) {
           // 风控可重试：换新 uskey 就能过，交给宿主重试
-          return errorResponse(503, "risk_blocked", `上游风控拦截（通常是一次性 uskey 用完了，重试即可）：${text.slice(0, 300)}`)
+          return errorResponse(
+            503,
+            "risk_blocked",
+            "上游风控拦截：这是 Marvis 按**设备指纹 / 出口**判的风控（不是登录失效、也不是密钥错）。"
+              + "偶发一次通常是 uskey 用完了，宿主重试一次就过；**如果连续每次都是这句**，说明这台机器/这个出口被盯上了 ——"
+              + "停几分钟、别并发打，或换个网络出口（换账号没用：实测同一设备的 4 个账号一起被拦）。"
+              + `原始返回：${text.slice(0, 300)}`,
+          )
         }
         if (MODEL_ISSUE.test(text) || response.status === 404) {
           // 模型级错误 → 404，只搁置这个模型，不打死账号（AGENTS 坑 6）

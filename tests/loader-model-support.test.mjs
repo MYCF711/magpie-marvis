@@ -260,6 +260,21 @@ test("发给上游的 UA 必须是 Marvis agent 自己的那个（三形状都�
   }
 })
 
+test("4100404 风控 → 503 risk_blocked，文案要说清「换账号没用、可能是设备/出口」", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 4100404, msg: "客户端通用错误:请求被风控拦截" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 503, "风控是可重试语义，交给宿主重试")
+    const out = await res.json()
+    assert.equal(out.error.code, "risk_blocked")
+    assert.match(out.error.message, /设备指纹|出口/, "要说清是按设备/出口判的")
+    assert.match(out.error.message, /换账号没用/, "否则用户只会不停地换号")
+  } finally {
+    s.restore()
+  }
+})
+
 test("上游 4130001（无效模型id）→ 404 model_unavailable，不打死账号", async () => {
   const s = stubFetch(() => upstreamError(400, { code: 4130001, msg: "invalid request" }))
   try {
