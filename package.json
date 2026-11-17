@@ -1,6 +1,6 @@
 {
   "name": "magpie-marvis",
-  "version": "0.2.45",
+  "version": "0.2.46",
   "description": "magpie / OpenCode provider plugin for Tencent Marvis: its DeepSeek V4 Pro/Flash, Claude Opus/Sonnet 4.6, GPT-5.4, Hy3 and HY Vision models through the Marvis model gateway — no API key to paste, sign in with QQ or WeChat.",
   "type": "module",
   "main": "./index.mjs",
@@ -8,6 +8,7 @@
   "files": [
     "index.mjs",
     "src",
+    "panel",
     "README.md",
     "README-TEMPLATE.md",
     "AGENTS.md",
@@ -52,7 +53,18 @@
         "mode": "blocked",
         "text": ""
       }
-    }
+    },
+    "panels": [
+      {
+        "slot": "provider",
+        "title": "首行文本 First line text",
+        "titles": {
+          "zh": "首行文本",
+          "en": "First line text"
+        },
+        "file": "panel/first-line.html"
+      }
+    ]
   },
   "scripts": {
     "test": "node --test",
