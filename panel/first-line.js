@@ -71,9 +71,10 @@
     return opts
   }
 
+  // 文本就一个键：{"text": "…"}；老版本存的 {"firstLine": {"text": "…"}} 也读
   const firstLineOf = (o) => (o.firstLine && typeof o.firstLine === "object" ? o.firstLine : {})
   const textOf = (o) => {
-    const v = firstLineOf(o).text
+    const v = typeof o.text === "string" ? o.text : firstLineOf(o).text
     return typeof v === "string" ? v : ""
   }
 
@@ -113,7 +114,9 @@
       else dlg.removeAttribute("open")
       return
     }
-    const next = { ...opts, firstLine: { ...firstLineOf(opts), text: input.value } }
+    // 写回一个键；老的 firstLine 一并收掉（迁移，不留下两份文本）
+    const { firstLine: _legacy, ...rest } = opts
+    const next = { ...rest, text: input.value }
     try {
       const back = await magpie.options.set(next)
       opts = back && typeof back === "object" && !Array.isArray(back) ? back : next
