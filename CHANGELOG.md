@@ -3,6 +3,20 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.44 — 2026-11-17
+
+**新增（provider 编辑器里的「首行改写」面板：开关 + 输入框，不用手写 JSON）**
+
+- `magpie.panels` 声明一个 `provider` 槽的面板（`panel/first-line.html`），它会出现在**每个 provider 编辑器**里：
+  一个 `mode` 下拉（off / blocked / always）+ 一个「首行文本」输入框，改完自动保存
+- 面板通过 `_magpie/bridge.js` 的 `magpie.options.get()/.set()` 读写**本插件自己的**选项 ——
+  与 JSON 编辑框改的是同一份 `firstLine`，两条路等价
+- `options.set` 是整份替换 + 一秒最多一次：写回时展开读到的整份 opts（不抹掉别的键），输入防抖 1.2s
+- 新增 `tests/panel-manifest.test.mjs`（4 项）：面板清单形状 / `files` 白名单里必须带面板文件（漏了就是一块空白）/
+  provider 槽必须走 bridge 且覆盖三档 / 写回必须保留别的键
+- 验收：测试 179 项中 175 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过；
+  `npm pack --dry-run` 里能看到 `panel/first-line.{html,js,css}`
+
 ## 0.2.43 — 2026-11-17
 
 **新增（降级自查探针）+ 文档更正（降级落点不是固定值）**
