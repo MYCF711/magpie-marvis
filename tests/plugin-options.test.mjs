@@ -57,19 +57,20 @@ test("每条开关都符合 magpie 的校验规则（不合格会被静默丢掉
   }
 })
 
-test("中文用户看得懂：每个开关都有 zh 的 label 与 description", () => {
+test("中文用户看得懂：每个开关都有 zh 的 label", () => {
   for (const o of PLUGIN_OPTIONS) {
     assert.ok(o.labels?.zh, `${o.key} 缺 labels.zh`)
-    assert.ok(o.descriptions?.zh, `${o.key} 缺 descriptions.zh`)
+    assert.ok(o.labels.zh.trim().length <= 60, `${o.key} 的 labels.zh 超过 60 字符会被丢`)
   }
 })
 
-test("description 必须能一行画完 —— 换行会压到下一块（模型列表）上", () => {
-  // magpie 把 description 画成一行、行高按一行算；超了不省略也不撑高，
-  // 第二行会直接压在下面的「模型」区块上（2026-11-17 实测截图）。
+test("一条开关只占一行：不写 description（多一行就会压到「模型」区块上）", () => {
+  // magpie 的 .plugin-options 是 flex 的 .stack，但每个选项只预留一行的高度：
+  // 有 description 就多画一行，那一行会压在下一个 field（模型列表）上。
+  // 插件的渲染改不了，能改的只有「一条只占一行」—— 说明写进 label。
   for (const o of PLUGIN_OPTIONS) {
-    assert.ok(o.descriptions.zh.length <= 48, `${o.key} 的 zh description 太长（${o.descriptions.zh.length} > 48），会换行压到模型行`)
-    assert.ok(o.description.length <= 120, `${o.key} 的 en description 太长（${o.description.length} > 120），会换行压到模型行`)
+    assert.equal(o.description, undefined, `${o.key} 写了 description，会多一行压到模型区块上`)
+    assert.equal(o.descriptions, undefined, `${o.key} 写了 descriptions，会多一行压到模型区块上`)
   }
 })
 
