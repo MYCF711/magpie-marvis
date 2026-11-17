@@ -172,6 +172,9 @@ function withFirstLine(messages, text) {
  * （issue #62：Claude Desktop 走 /v1/messages 时 always 选项等于空操作）。
  * 抓到哪处换哪处，其余字段一个字节不动；都没命中就把原对象原样返回（调用方靠引用判「有没有改」）。
  *
+ * 来历：#62 由 @zhey80 定位（同一模型只改首行长度，比对 usage.jsonl 的 up_bytes 差值 = 多加的字符数，
+ * 证明首行没被替换）。
+ *
  * @param {object} json  请求体
  * @param {string} text  要写进去的第一行（整行替换，行内其余内容与后续行不动）
  * @returns {object} 改过的**新对象**，或原对象（没得改）
