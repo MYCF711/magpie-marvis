@@ -3,6 +3,20 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.54 — 2026-11-17
+
+**修（首行改写只认 chat 的 `messages[]`：Anthropic / Responses 协议下等于空操作，issue #62）**
+
+- 新增 `withFirstLineInBody` / `firstLineInBody`：一处按协议取/放 system 文本，always 与 403 兜底两条路共用
+  - chat：`messages[]` 里第一条 `role: system`
+  - **Anthropic（`/v1/messages`）：顶层 `system`** —— 字符串直接换；数据块数组只换**第一个** `text` 块，其余块与 `cache_control` 原样
+  - Responses：顶层 `instructions`
+- 门禁从「只认 `/chat/completions`」放宽到 `/messages`、`/responses`：不放行的话那两种协议会被整个短路，改写一次都跑不到
+- **内置兜底句换成 `You are an AI assistant.`**：2026-11-17 直打实测 `You are a helpful assistant.` 已经是 403，
+  也就是说旧默认值让 `first_line_fallback` 变成空操作；同批实测 `You are an AI assistant.` / `You are an assistant.` /
+  `You are a coding assistant.` 都是 200
+- 用例 +4：顶层 `system`（字符串）、顶层 `system`（数据块，带 `cache_control`）、顶层 `instructions`、403 兜底认顶层 `system`
+
 ## 0.2.53 — 2026-11-17
 
 **改（不再自动猜「哪句首行能过」：白名单改写整套删掉，首行只由用户自己写）**

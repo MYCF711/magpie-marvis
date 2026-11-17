@@ -69,7 +69,7 @@ const CONTENT_FILTER_HINT =
 // 为什么要有它：上游拦的是「system 首行里的身份词对」，而**哪句能过一直在变** ——
 // 我们把一句句首行加进白名单，换来的是它们很快也被拦。所以不再替用户猜：
 // 首行由用户自己写（选项「提示词首行替换」），插件只负责把它写进去。
-// 兜底句不含任何 agent 产品名（`You are a helpful assistant.` 实测 200），
+// 兜底句不含任何 agent 产品名（`You are an AI assistant.` 实测 200），
 // 它能过；代价是模型不知道自己是哪个客户端，所以**默认只在被拦之后才用**（mode=blocked）。
 //
 // 两个开关由 **magpie 渲染在供应商卡片里**（`auth.options`，见 context.mjs 的 PLUGIN_OPTIONS），
@@ -87,7 +87,7 @@ const CONTENT_FILTER_HINT =
 // 留空 = 内置兜底句。整行替换：只换 system 消息的第一行，第二行起原样。
 
 /** 内置兜底首行：不含任何 agent 产品名（实测 200） */
-const FALLBACK_FIRST_LINE = "You are a helpful assistant."
+const FALLBACK_FIRST_LINE = "You are an AI assistant."
 
 
 /**
@@ -161,6 +161,95 @@ function withFirstLine(messages, text) {
   return touched ? out : messages
 }
 
+/**
+ * 把 system 提示词的**第一行**换成 `text` —— 三种协议一次覆盖。
+ *
+ *   chat（/v1/chat/completions）        `messages[]` 里第一条 `role: "system"`
+ *   responses（/v1/responses）          顶层 `instructions`（字符串）
+ *   anthropic（/v1/messages）           顶层 `system`：字符串，或 `[{type:"text", text}]` 数据块
+ *
+ * 为什么三处都要看：magpie 会把客户的协议折成 provider 的 chat 上游，但**折法不止一种**
+ * （issue #62：Claude Desktop 走 /v1/messages 时 always 选项等于空操作）。
+ * 抓到哪处换哪处，其余字段一个字节不动；都没命中就把原对象原样返回（调用方靠引用判「有没有改」）。
+ *
+ * @param {object} json  请求体
+ * @param {string} text  要写进去的第一行（整行替换，行内其余内容与后续行不动）
+ * @returns {object} 改过的**新对象**，或原对象（没得改）
+ */
+function withFirstLineInBody(json, text) {
+  if (!json || typeof json !== "object") return json
+  let out = json
+  let changed = false
+
+  const messages = withFirstLine(out.messages, text)
+  if (messages !== out.messages) {
+    out = { ...out, messages }
+    changed = true
+  }
+
+  if (typeof out.instructions === "string" && out.instructions.trim()) {
+    const line = firstLineOf(out.instructions)
+    const next = text + out.instructions.slice(line.length)
+    if (next !== out.instructions) {
+      out = { ...out, instructions: next }
+      changed = true
+    }
+  }
+
+  if (typeof out.system === "string" && out.system.trim()) {
+    const line = firstLineOf(out.system)
+    const next = text + out.system.slice(line.length)
+    if (next !== out.system) {
+      out = { ...out, system: next }
+      changed = true
+    }
+  } else if (Array.isArray(out.system)) {
+    let done = false
+    const blocks = out.system.map((block) => {
+      if (done || !block || typeof block !== "object") return block
+      if (block.type !== "text" || typeof block.text !== "string") return block
+      done = true
+      const line = firstLineOf(block.text)
+      return { ...block, text: text + block.text.slice(line.length) }
+    })
+    if (done) {
+      out = { ...out, system: blocks }
+      changed = true
+    }
+  }
+
+  return changed ? out : json
+}
+
+/**
+ * 请求体里**当前**那行 system 首行（三处协议都看）。
+ *
+ * 403 兜底重试要先问一句「是不是已经是用户那句了」—— 已经是就别再白打一次。
+ *
+ * @param {object} json
+ * @returns {string}
+ */
+function firstLineInBody(json) {
+  if (!json || typeof json !== "object") return ""
+  const messages = Array.isArray(json.messages) ? json.messages : []
+  for (const message of messages) {
+    if (!message || message.role !== "system") continue
+    const text = typeof message.content === "string" ? message.content : ""
+    if (text.trim()) return firstLineOf(text).trim()
+  }
+  if (typeof json.instructions === "string" && json.instructions.trim()) {
+    return firstLineOf(json.instructions).trim()
+  }
+  if (typeof json.system === "string" && json.system.trim()) return firstLineOf(json.system).trim()
+  if (Array.isArray(json.system)) {
+    for (const block of json.system) {
+      if (!block || typeof block !== "object" || block.type !== "text") continue
+      if (typeof block.text === "string" && block.text.trim()) return firstLineOf(block.text).trim()
+    }
+  }
+  return ""
+}
+
 
 /**
  * 构造一个错误 Response。
@@ -210,13 +299,7 @@ function systemFirstLineOf(bodyString) {
   } catch {
     return ""
   }
-  const messages = Array.isArray(json?.messages) ? json.messages : []
-  for (const message of messages) {
-    if (!message || message.role !== "system") continue
-    const text = typeof message.content === "string" ? message.content : ""
-    if (text.trim()) return firstLineOf(text).trim()
-  }
-  return ""
+  return firstLineInBody(json)
 }
 
 // ⚠ 不要用 TABLE（`DISPLAY_BY_SLOT`）当准入集合。
@@ -278,8 +361,10 @@ export function loaderHook(input, options = {}) {
         const firstLine = firstLineOption(input, options)
         const url = typeof target === "string" ? target : target instanceof URL ? target.href : target.url
 
-        // 非补全请求（/models 之类）原样放行 —— 上游没有这个端点，交给上层兜底
-        if (!/\/chat\/completions\b/.test(url)) {
+        // 非补全请求（/models 之类）原样放行 —— 上游没有这个端点，交给上层兜底。
+        // 三种补全协议都要进来：/chat/completions、/messages（Anthropic）、/responses，
+        // 否则那两种协议下「每个请求都改写首行」等于空操作（issue #62）。
+        if (!/\/(?:chat\/completions|messages|responses)\b(?!\/)/.test(url)) {
           return fetch(target, init)
         }
 
@@ -324,10 +409,10 @@ export function loaderHook(input, options = {}) {
          * 成功返回规范化后的响应；失败返回 null（落回统一诊断，不把第二次的错误文本当结果）。
          */
         const retryWithFallbackFirstLine = async (json) => {
-          const messages = withFirstLine(json.messages, firstLine.text)
-          if (messages === json.messages) return null // 没有 system 消息，无从下手
+          const next = withFirstLineInBody(json, firstLine.text)
+          if (next === json) return null // 三处都找不到 system 文本，无从下手
           try {
-            const retry = await callUpstream(JSON.stringify({ ...json, messages }))
+            const retry = await callUpstream(JSON.stringify(next))
             return retry.ok ? normalizeStreaming(retry) : null
           } catch {
             return null
@@ -390,9 +475,9 @@ export function loaderHook(input, options = {}) {
               }
               // mode=always：用户明确要求「每个请求都换成我填的那句」
               if (firstLine.mode === "always") {
-                const forced = withFirstLine(json.messages, firstLine.text)
-                if (forced !== json.messages) {
-                  json.messages = forced
+                const forced = withFirstLineInBody(json, firstLine.text)
+                if (forced !== json) {
+                  json = forced
                   changed = true
                 }
               }
