@@ -3,6 +3,24 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.49 — 2026-11-17
+
+**修复（Codex Desktop 的 `/v1/responses` 仍 403：身份句在顶层 `instructions`，旧门禁没放行）**
+
+- 门禁从「只认 `/chat/completions`」扩到 `/(chat/completions|responses)`：`/v1/responses` 不再被整个短路，
+  身份句改写、`always` 模式、403 兜底重试都能跑到
+- 身份句判定与改写同时覆盖顶层 `instructions`：只换首句，后续行与其余字节不动
+- 403 兜底重试同样处理 `instructions`，不再只换 `messages`
+- 新增 4 条 `/v1/responses` 用例：白名单改写 / 不误改 / `always` / 403 兜底重试
+- 实机验证：装到本机 magpie 后过真实网关，`/v1/responses` 与被拦首句 `You are an AI agent powered by DeepSeek Harness.`
+  改写后 **200**，`/chat/completions` 同步 **200** 未回归
+- ⚠ 未做：绕开插件、在同一分钟直打上游的「未改写 403 / 改写后 200」逐字对照（本机无账号凭据），
+  与 0.2.48 之前每条身份句都有直打实测的惯例有差距，合并前建议按上游实测习惯补一遍
+
+> 起因：Codex Desktop 经 magpie 调腾讯 Marvis 时，新会话稳定 403「上游内容过滤拦截」。定位到两个叠加原因：
+> ① `magpie-marvis` 门禁只放行 `/chat/completions`，`/v1/responses` 被原样转发、身份句一次都没改；
+> ② Responses API 把 system 提示放在顶层 `instructions`，不在 `messages` 里。两者叠加使改写完全不生效。
+
 ## 0.2.48 — 2026-11-17
 
 **修复（说明文字压到模型行）+ 改版（首行文本：点按钮弹输入框）**

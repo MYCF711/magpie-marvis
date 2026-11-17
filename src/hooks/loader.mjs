@@ -290,6 +290,9 @@ function identityBlockedInSystem(bodyString) {
   } catch {
     return false
   }
+  // Responses API 把 system 提示放在顶层 `instructions`，不在 `messages` 里；
+  // 漏查它会让 `/v1/responses` 的身份句既不参与改写、也不计入诊断。
+  if (typeof json?.instructions === "string" && IDENTITY_PHRASE_TEST.test(firstLineOf(json.instructions))) return true
   const messages = Array.isArray(json?.messages) ? json.messages : []
   for (const message of messages) {
     if (!message || message.role !== "system") continue
@@ -359,7 +362,9 @@ export function loaderHook(input, options = {}) {
         const url = typeof target === "string" ? target : target instanceof URL ? target.href : target.url
 
         // 非补全请求（/models 之类）原样放行 —— 上游没有这个端点，交给上层兜底
-        if (!/\/chat\/completions\b/.test(url)) {
+        // ⚠ 必须同时放行 Responses API：Codex Desktop 走 `/v1/responses`，system 提示写在顶层
+        //   `instructions`。只认 `/chat/completions` 会把这类请求整个短路，身份句改写一次都跑不到。
+        if (!/\/(?:chat\/completions|responses)\b/.test(url)) {
           return fetch(target, init)
         }
 
@@ -405,9 +410,18 @@ export function loaderHook(input, options = {}) {
          */
         const retryWithFallbackFirstLine = async (json) => {
           const messages = withFirstLine(json.messages, firstLine.text)
-          if (messages === json.messages) return null // 没有 system 消息，无从下手
+          // Responses API 的首句在顶层 `instructions` —— 单独判一次，否则这类请求兜底永远不触发
+          let instructions = json.instructions
+          if (typeof instructions === "string") {
+            const line = firstLineOf(instructions)
+            instructions = firstLine.text + instructions.slice(line.length)
+          }
+          if (messages === json.messages && instructions === json.instructions) return null // 没有 system 文本，无从下手
+          // 原请求没有 instructions 时不要凭空加一个 undefined 键（JSON.stringify 会丢，但保留原形状更稳）
+          const payload = { ...json, messages }
+          if (instructions !== undefined) payload.instructions = instructions
           try {
-            const retry = await callUpstream(JSON.stringify({ ...json, messages }))
+            const retry = await callUpstream(JSON.stringify(payload))
             return retry.ok ? normalizeStreaming(retry) : null
           } catch {
             return null
@@ -475,12 +489,30 @@ export function loaderHook(input, options = {}) {
                 json.messages = rewritten
                 changed = true
               }
+              // ⚠ Responses API（Codex Desktop）的 system 提示在顶层 `instructions`，
+              //   不在 `messages` 里 —— 只改 messages 会漏掉它，身份句原样发出仍 403。
+              //   同样只改首句，其余字节不碰。
+              if (typeof json.instructions === "string") {
+                const rw = rewriteFirstLine(json.instructions)
+                if (rw !== json.instructions) {
+                  json.instructions = rw
+                  changed = true
+                }
+              }
               // mode=always：用户明确要求「每个请求都换成我填的那句」，优先级高于白名单
               if (firstLine.mode === "always") {
                 const forced = withFirstLine(json.messages, firstLine.text)
                 if (forced !== json.messages) {
                   json.messages = forced
                   changed = true
+                }
+                if (typeof json.instructions === "string") {
+                  const line = firstLineOf(json.instructions)
+                  const next = firstLine.text + json.instructions.slice(line.length)
+                  if (next !== json.instructions) {
+                    json.instructions = next
+                    changed = true
+                  }
                 }
               }
             }

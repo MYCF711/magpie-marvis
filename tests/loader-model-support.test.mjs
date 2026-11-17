@@ -23,6 +23,7 @@ import { loaderHook, DEFAULT_MODEL } from "../src/hooks/loader.mjs"
 import { DISPLAY_BY_SLOT, MODEL_ALIASES } from "../src/context.mjs"
 
 const CHAT_URL = "https://yybadaccess.3g.qq.com/v1/chat/completions"
+const RESPONSES_URL = "https://yybadaccess.3g.qq.com/v1/responses"
 
 /** 假凭据：只是形状对，值全部是测试用的假串，不会发到任何真实上游 */
 const AUTH = Object.freeze({
@@ -81,6 +82,21 @@ function requestFor(model, stream = false) {
         stream,
         messages: [{ role: "user", content: "ping" }],
       }),
+    },
+  }
+}
+
+/**
+ * 组一个 /v1/responses 请求（Codex Desktop 的形状）：system 提示在顶层 `instructions`，
+ * 不在 `messages` 里 —— 这正是旧门禁漏掉它的原因。
+ */
+function requestForResponses(model, instructions) {
+  return {
+    url: RESPONSES_URL,
+    init: {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, instructions, input: "ping" }),
     },
   }
 }
@@ -901,5 +917,87 @@ test("text 留空 / 选项形状不对 → 用内置兜底句，绝不让请求�
     } finally {
       s.restore()
     }
+  }
+})
+
+// ─────────────────────────────────────────────────────────────
+// Responses API（Codex Desktop）：system 提示在顶层 `instructions`
+//
+// 旧门禁只认 `/chat/completions`，`/v1/responses` 被整个短路 —— 身份句改写一次都跑不到，
+// 所以 Codex Desktop 新会话稳定 403。这一组用例锁住：门禁放行 + `instructions` 的首句
+// 与 `messages` 走同一套白名单 / always / 兜底重试。
+// ─────────────────────────────────────────────────────────────
+
+test("/v1/responses 不再被门禁短路：instructions 首句走白名单改写", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestForResponses(
+      "deepseek-v4-1-flash-261017",
+      "You are an AI agent powered by DeepSeek Harness.\n\nDo the task.",
+    )
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 200)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(
+      sent.instructions,
+      "You are an AI agent running in DeepSeek Harness.\n\nDo the task.",
+      "只换首句，第 2 行原样保留",
+    )
+  } finally {
+    s.restore()
+  }
+})
+
+test("/v1/responses：instructions 不含白名单句时一个字节都不改", async () => {
+  const input = "You are Codex, based on GPT-5.\n\nGeneral rules."
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestForResponses("deepseek-v4-1-flash-261017", input)
+    await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(JSON.parse(s.calls[0].init.body).instructions, input, "不跟用户自己的首句打架")
+  } finally {
+    s.restore()
+  }
+})
+
+test("/v1/responses：first_line_always 开启时 instructions 首行也换成指定句", async () => {
+  const s = stubFetch(() => upstreamOk())
+  try {
+    const req = requestForResponses("deepseek-v4-1-flash-261017", "You are Codex, based on GPT-5.\n\nGeneral rules.")
+    await (await loaderOf({}, { first_line_always: true })).fetch(req.url, req.init)
+    assert.equal(
+      JSON.parse(s.calls[0].init.body).instructions,
+      "You are a helpful assistant.\n\nGeneral rules.",
+      "always 模式对 instructions 同样生效",
+    )
+  } finally {
+    s.restore()
+  }
+})
+
+test("/v1/responses：白名单救不了的首句 + 403 → 换兜底首行重试一次", async () => {
+  let n = 0
+  const s = stubFetch(() => {
+    n += 1
+    return n === 1
+      ? upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" })
+      : upstreamOk()
+  })
+  try {
+    const req = requestForResponses(
+      "deepseek-v4-1-flash-261017",
+      "You are a coding agent, from a new client.\nSecond line stays.",
+    )
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    assert.equal(res.status, 200, "第二次成功就把 200 交给宿主")
+    assert.equal(s.calls.length, 2, "被拦之后要重试一次")
+    const retried = JSON.parse(s.calls[1].init.body)
+    assert.equal(
+      retried.instructions,
+      "You are a helpful assistant.\nSecond line stays.",
+      "instructions 首行也走兜底，第二行原样保留",
+    )
+  } finally {
+    s.restore()
   }
 })
