@@ -470,6 +470,7 @@ test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", 
   const alreadyFixed = [
     "You are a coding agent running in the Codex-CLI, a terminal-based coding assistant.",
     "You are Claude-Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK.",
+    "You are Z-Code, an interactive agent working with the user toward their goals.",
   ]
   for (const text of alreadyFixed) {
     const s = stubFetch(() => upstreamOk())
@@ -486,6 +487,86 @@ test("客户端已经写成 Codex-CLI / Claude-Code → 一个字节都不改", 
     }
   }
 })
+// ─────────────────────────────────────────────────────────────
+// ZCode 身份句（issue #38，2026-11-17 直打上游实测）
+//   `You are ZCode, an interactive agent working with the user toward their goals.` → 403
+//   `You are ZCode.`                                                              → 403
+//   `You are Z-Code, an interactive agent working with the user toward their goals.` → 200
+//   `You are Zed, …` / `You are a helpful assistant.`                              → 200
+// ⇒ 判据仍是**字面量 `ZCode`**（连字符形态在有空格可换的这条上照样有效），
+//   与 0.2.38 那条「连字符失效、改成换句式」的 DSH 结论不是一回事，别把两条混成一条。
+// ⚠ ZCode 的系统提示词不可配置（issue #38 原话），用户侧没有可行修法 ——
+//   不改写就等于这个客户端在插件里彻底不能用。
+// ─────────────────────────────────────────────────────────────
+
+test("ZCode 的身份句会被自动改写成 Z-Code（长短两种写法都覆盖）", async () => {
+  const variants = [
+    [
+      "You are ZCode, an interactive agent working with the user toward their goals.",
+      "You are Z-Code, an interactive agent working with the user toward their goals.",
+    ],
+    ["You are ZCode.", "You are Z-Code."],
+  ]
+  for (const [input, expected] of variants) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: input }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, expected)
+      assert.equal(sent.messages[1].content, "ping", "其余消息一个字符都不能动")
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("无关的首句（Zed / helpful assistant）不许被 ZCode 那条规则误伤", async () => {
+  const unrelated = [
+    "You are Zed, an interactive agent working with the user toward their goals.",
+    "You are a helpful assistant.",
+  ]
+  for (const text of unrelated) {
+    const s = stubFetch(() => upstreamOk())
+    try {
+      const req = requestFor("deepseek-v4-1-flash-261017")
+      const body = JSON.parse(req.init.body)
+      body.messages = [{ role: "system", content: text }, ...body.messages]
+      req.init.body = JSON.stringify(body)
+      await (await loaderOf()).fetch(req.url, req.init)
+      const sent = JSON.parse(s.calls[0].init.body)
+      assert.equal(sent.messages[0].content, text, `上游本来就放行，改了是多余改动：${text.slice(0, 32)}…`)
+    } finally {
+      s.restore()
+    }
+  }
+})
+
+test("ZCode 身份句被拦时也要给 content_filtered 诊断（诊断集合与改写集合同步）", async () => {
+  const s = stubFetch(() => upstreamError(403, { code: 403, msg: "非法请求", type: "permission_error" }))
+  try {
+    const req = requestFor("deepseek-v4-1-flash-261017")
+    const body = JSON.parse(req.init.body)
+    body.messages = [
+      { role: "system", content: "You are ZCode, an interactive agent working with the user toward their goals." },
+      ...body.messages,
+    ]
+    req.init.body = JSON.stringify(body)
+    const res = await (await loaderOf()).fetch(req.url, req.init)
+    const sent = JSON.parse(s.calls[0].init.body)
+    assert.equal(sent.messages[0].content.startsWith("You are Z-Code,"), true, "先改写")
+    assert.equal(res.status, 403)
+    const out = await res.json()
+    assert.equal(out.error.code, "content_filtered")
+    assert.match(out.error.message, /QQ 群 451129479/, "要给出上报/修法的入口")
+  } finally {
+    s.restore()
+  }
+})
+
 // ─────────────────────────────────────────────────────────────
 // 中文 / 本地化身份句（2026-11-16 复测）
 //
@@ -519,6 +600,7 @@ test("身份句不在 system 首行（第 2 行 / user 角色）→ 一个字节
     [{ role: "system", content: "你是一个助手。\n你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }, { role: "user", content: "ping" }],
     [{ role: "user", content: "你是一个由 DeepSeek Harness 驱动的 AI 智能体。" }],
     [{ role: "system", content: "You are a helpful assistant." }, { role: "assistant", content: "You are an AI agent powered by DeepSeek Harness." }, { role: "user", content: "ping" }],
+    [{ role: "system", content: "You are a helpful assistant.\nYou are ZCode, an interactive agent working with the user toward their goals." }, { role: "user", content: "ping" }],
   ]
   for (const messages of cases) {
     const s = stubFetch(() => upstreamOk())
