@@ -3,6 +3,22 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.46 — 2026-11-17
+
+**新增（首行文本的输入框：供应商卡片里的面板）**
+
+- 开关已经由 magpie 原生渲染（`auth.options`，只支持布尔）；**文本没有原生控件**，
+  所以补一个 `magpie.panels`（slot: provider）面板：一个输入框 + 回车/失焦自动保存，
+  写的是同一份 `firstLine.text`，与「每个请求都改写首行」开关配套
+- 位置由 magpie 决定：`app.js` 里 `ed.append(slot)` 在**编辑器末尾、取消/保存之上**，
+  开关那两行在它的上方（`pluginOptionsField` 固定插在「高级」之前）—— 两者都无法置顶
+- 面板只在 provider 编辑器里出现；`options.set` 是整份替换 + 一秒最多一次，
+  所以写回展开读到的整份 opts，输入防抖 1.2s
+- 新增 `tests/panel-manifest.test.mjs`（5 项）：清单形状 / files 白名单带面板文件（漏了就是空白）/
+  必须加载 bridge 且用 options.get+set / 写回保留别的键 / 面板不许自己 fetch
+- 验收：测试 184 项中 180 通过、4 项因未注入 live 凭据跳过；合规检查 42 项全过；
+  `npm pack --dry-run` 里能看到 `panel/first-line.{html,js,css}`
+
 ## 0.2.45 — 2026-11-17
 
 **修复（开关放错层：0.2.44 的 provider 面板换成 magpie 自带的 `auth.options` 开关）**
