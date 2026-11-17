@@ -167,14 +167,17 @@ export const PLUGIN_OPTIONS = Object.freeze([
   Object.freeze({
     key: "first_line_fallback",
     label: "Rewrite the first line when the upstream refuses it (403)",
-    labels: { zh: "被上游拒绝时改写首行（403 内容过滤）", "zh-TW": "被上游拒絕時改寫首行（403 內容過濾）" },
+    labels: {
+      zh: "被上游拒绝时改写首行：内容过滤拦下（403）时把 system 首行换成兜底句重发一次",
+      "zh-TW": "被上游拒絕時改寫首行：內容過濾攔下（403）時把 system 首行換成兜底句重發一次",
+    },
     default: true,
     placement: "top",
   }),
   Object.freeze({
     key: "first_line_always",
     label: "Rewrite the first line of every request",
-    labels: { zh: "每个请求都改写首行（文本在卡片底部「首行文本」里设）" },
+    labels: { zh: "每个请求都改写首行：把 system 首行换成设置 → 插件里本插件「选项」那句，留空用兜底句" },
     default: false,
     placement: "top",
     confirm: "Every request will have its system prompt's first line replaced, including the ones that would work as they are.",

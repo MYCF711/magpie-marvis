@@ -52,6 +52,8 @@ test("每条开关都符合 magpie 的校验规则（不合格会被静默丢掉
       for (const [lang, words] of Object.entries(o[field])) {
         assert.ok(lang.trim() && lang.length <= 16, `${field} 的语言码不合格：${lang}`)
         assert.ok(typeof words === "string" && words.trim(), `${field}.${lang} 不能是空串（会被丢）`)
+        // magpie 的 inLanguages(o.labels, 60)：每条译文也按 label 的上限截断，超了整条译文被丢
+        if (field === "labels") assert.ok(words.trim().length <= 60, `labels.${lang} 超过 60 字符会被丢`)
       }
     }
   }
