@@ -183,14 +183,19 @@ test("refresh 走串行锁（成对轮换的 token 不能被并发打掉）", ()
   assert.match(source, /metadata: \{ \.\.\.meta/)
 })
 
-test("native 目录若存在则 4 个文件必须齐全（缺一个就静默返回 null）", () => {
-  // ⚠ 4 个文件是**可选增强**，不随仓库分发（平台相关的二进制，体积大）。
-  //   目录不存在时直接跳过 —— 不能因为没装它就判测试失败。
+test("native 目录若放了 DLL，出票入口必须齐全", () => {
+  // 二进制不随仓库分发。目录里只有桥源码时跳过；放了 DLL 就必须有桥或 napi。
   const dir = fileURLToPath(new URL("../native", import.meta.url))
   if (!existsSync(dir)) return
-  for (const f of ["beacon_napi.node", "qimei.dll", "beacon_sdk.dll", "beacon_wrapper.dll"]) {
-    assert.ok(existsSync(join(dir, f)), `native/${f} 必须齐全（else getUskey() 静默返回 null）`)
+  const hasDll = ["qimei.dll", "beacon_sdk.dll", "beacon_wrapper.dll"].some((f) => existsSync(join(dir, f)))
+  if (!hasDll) return
+  for (const f of ["qimei.dll", "beacon_sdk.dll", "beacon_wrapper.dll"]) {
+    assert.ok(existsSync(join(dir, f)), `native/${f} 必须齐全`)
   }
+  assert.ok(
+    existsSync(join(dir, "beacon_napi.node")) || existsSync(join(dir, "beacon_shim.dll")),
+    "native/ 至少要有 beacon_napi.node 或 beacon_shim.dll",
+  )
 })
 
 test("config() 合并：用户改过的值优先，插件只补缺", async () => {

@@ -379,7 +379,20 @@ export function loaderHook(input, options = {}) {
         const callUpstream = async (payload) => {
           let headers
           try {
-            headers = llmHeaders(creds, { scene: "preload_summary", agentTag: "auto_discovery" })
+            // uskey 必须按本次请求的 model / conv / resp 现签，不能复用上一张票。
+            let payloadModel = DEFAULT_MODEL
+            try {
+              const payloadText =
+                typeof payload === "string"
+                  ? payload
+                  : Buffer.isBuffer(payload)
+                    ? payload.toString("utf8")
+                    : ""
+              if (payloadText) payloadModel = canonicalModelId(JSON.parse(payloadText)?.model) || DEFAULT_MODEL
+            } catch {
+              /* 非 JSON 用默认槽位 */
+            }
+            headers = await llmHeaders(creds, { model: payloadModel, scene: "agent_chat", agentTag: "main" })
           } catch (err) {
             throw new HeaderUnavailable(err?.message ?? String(err))
           }
@@ -544,9 +557,9 @@ export function loaderHook(input, options = {}) {
           return errorResponse(
             503,
             "risk_blocked",
-            "上游风控拦截：这是 Marvis 按**设备指纹 / 出口**判的风控（不是登录失效、也不是密钥错）。"
-              + "偶发一次通常是 uskey 用完了，宿主重试一次就过；**如果连续每次都是这句**，说明这台机器/这个出口被盯上了 ——"
-              + "停几分钟、别并发打，或换个网络出口（换账号没用：实测同一设备的 4 个账号一起被拦）。"
+            "上游风控拦截：uskey 没有按本次请求上下文用 Beacon SDK 现签（不是登录失效，也不是密钥错）。"
+              + "请把官方客户端的 beacon_wrapper.dll / beacon_sdk.dll / qimei.dll 放到插件 native/，并编译 beacon_shim.dll。"
+              + "没有这套 DLL 时插件只能发随机 uskey，上游会一直返回 4100404，重试没用，换账号没用。"
               + `原始返回：${text.slice(0, 300)}`,
           )
         }

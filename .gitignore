@@ -10,3 +10,13 @@ kifu/
 
 # 临时实测脚本（含真实凭据的探针，绝不进仓库）
 tmp/
+
+# 官方客户端 DLL / 本机设备指纹。只提交桥的 C 源码。
+native/*.dll
+native/*.node
+native/*.exe
+native/*.lib
+native/*.exp
+native/*.obj
+native/qimei36.txt
+native/qimei.txt

@@ -3,6 +3,15 @@
 > 每个版本一节，**一条一行**，说用户能感知的变化。
 > 格式与规矩见 [UPDATING.md](./UPDATING.md)。
 
+## 0.2.58 — 2026-11-22
+
+**修（`/v1/chat/completions` 持续 4100404：随机 uskey 不再被上游接受）**
+
+- 2026-11-17 起，模型网关校验 `Ual-Access-MarvisExt.uskey` 是否按本次请求的 bus_info 由 Beacon SDK 现签。`randomBytes` 造的票第一次就会 403，换账号、换出口、改 system 首行都一样
+- 新增 `native/marvis_beacon_shim.c`：官方 Windows 客户端只有 `beacon_wrapper.dll`，没有 `beacon_napi.node`。桥在运行时从 `beacon_get_uskey` 里定位未导出的 Client 单例，所以客户端升级不用改偏移
+- `llmHeaders()` 改为异步，每次请求生成一套 `conv_` / `resp_` / `nonce`，并把它写进 uskey 和 `Marvis-*` 头
+- 没有 DLL 时仍退回随机票，错误文案改为说明要放 native 文件，不再建议「换出口 / 重试」
+
 ## 0.2.57 — 2026-11-17
 
 **改（4100404 风控的提示说清区别，issue #68）**

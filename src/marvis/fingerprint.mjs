@@ -3,12 +3,15 @@
 // 这两个值都是 Marvis 客户端在本地生成的设备标识，随每个请求放进
 // `Ual-Access-MarvisExt` 头里。本模块负责给出符合上游格式的值。
 //
-// 实现分两条路：
-//   1. 装了 Marvis 客户端并保留 `native/` 目录时 —— 用客户端自带的 Beacon SDK 现签；
-//   2. 否则 —— 按上游要求的格式本地生成。
+// 2026-11-17 之后，`/v1/chat/completions` 会校验 uskey 是否按**本次请求的 bus_info**
+// 由 Beacon SDK 现签。随机串第一次就会 4100404。
 //
-// `native/` 目录是可选的：存在且能加载时优先使用，否则按同样的格式在本地生成。
-// 那 4 个文件是与平台相关的二进制，不随本仓库分发。
+// 出票顺序：
+//   1. native/beacon_shim.dll + beacon_wrapper.dll（官方 Windows 客户端只有 DLL，没有 napi）
+//   2. native/beacon_napi.node（旧的 Node 插件形态，可选）
+//   3. 随机串（没有 SDK 时的兜底；线上会被 4100404）
+//
+// DLL 不随仓库分发。桥的源码在 native/marvis_beacon_shim.c。
 //
 // ⚠ `qimei36` 取不到真值时返回空串，由调用方整个不发该字段 ——
 //   这个字段上游要求与设备一致，不适合用占位值冒充。
@@ -18,6 +21,11 @@ import { createRequire } from "node:module"
 import { existsSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { shimAvailable, shimInit, shimQimei, shimUskey } from "./beacon-shim.mjs"
+
+/** 与 beacon_shim 初始化用的 appKey / 版本。可用环境变量覆盖。 */
+const SHIM_APP_KEY = process.env.MARVIS_QIMEI_APPKEY || "0WIN06Y06DKV1IUQ"
+const SHIM_APP_VERSION = process.env.MARVIS_APP_VERSION || "1.60.3400.35"
 
 const require = createRequire(import.meta.url)
 
@@ -58,18 +66,26 @@ function tryBeacon() {
 }
 
 /**
- * 一个 uskey。
+ * 按本次请求上下文出一张 uskey。
  *
- * 有 native/ 且能加载 → 用 SDK 签；否则本地生成一个同长度同格式的值。
- *
- * @param {string} [businessId] 业务 id，模型网关固定 `marvis_client`
- * @returns {string}
+ * @param {{ guid?: string, openid?: string } | string} [acct]
+ *   旧调用 `uskeyOf("marvis_client")` 仍然接受，但没有 busInfo 时签不出上下文票。
+ * @param {{ busInfo?: string }} [identity]
+ * @returns {Promise<string>}
  */
-export function uskeyOf(businessId = "marvis_client") {
+export async function uskeyOf(acct = {}, identity = {}) {
+  const busInfo = typeof acct === "string" ? "" : String(identity?.busInfo || "")
+  const businessId = typeof acct === "string" ? acct : "marvis"
+
+  if (busInfo && (await shimInit(SHIM_APP_KEY, SHIM_APP_VERSION))) {
+    const ticket = shimUskey(busInfo)
+    if (ticket) return ticket
+  }
+
   const b = tryBeacon()
   if (b) {
     try {
-      const real = String(b.getUskey(businessId, { reqScene: 1, taskType: "user" }) ?? "")
+      const real = String(b.getUskey(businessId, busInfo || { reqScene: 1, taskType: "user" }) ?? "")
       if (real && real !== "null") return real
     } catch {
       /* 拿不到就落到本地生成，不阻塞请求 */
@@ -100,6 +116,8 @@ export function syntheticUskey() {
  * @returns {string} 真值或空串
  */
 export function qimei36() {
+  const fromShim = shimQimei()
+  if (fromShim) return fromShim
   const b = tryBeacon()
   if (!b) return ""
   try {
@@ -111,7 +129,7 @@ export function qimei36() {
 
 /** 当前是否在用 SDK 签指纹（诊断用） */
 export function usingNativeFingerprint() {
-  return tryBeacon() !== null
+  return shimAvailable() || tryBeacon() !== null
 }
 
 /** 给用户看的说明 */

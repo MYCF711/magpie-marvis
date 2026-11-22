@@ -80,21 +80,27 @@ magpie plugin add MYCF711/magpie-marvis
   Docker/WSL）时用这条——授权页在你自己的浏览器里打开，登录完把地址栏那条
   `…marvis_oauth?login_type=…&code=…&state=…` 整条粘贴回 magpie 的输入框即可
 
-## 设备指纹（不需要任何二进制）
+## 设备指纹（2026-11-17 之后必须用官方 SDK 现签）
 
-请求头 `Ual-Access-MarvisExt` 里要带一个 **uskey**（设备指纹）和一个 `qimei36`。
-这两个值由插件在本地生成，**不需要安装 Marvis 客户端，也不需要任何 DLL**。
+`/v1/chat/completions` 会校验 `Ual-Access-MarvisExt.uskey` 是否按**这次请求**的
+`bus_info` 由 Beacon SDK 算出来。没有 SDK 时插件仍会塞一个随机串，但上游直接回
+`403 {"code":4100404}`。换账号、换网络、改 system 首行都过不了。
 
-早期版本曾经打包过 4 个 Windows 二进制来调用官方 SDK 现签，现在不再需要：
-没有 `native/` 目录时插件会本地生成同样格式的值，功能完全一致。
+官方 Windows 客户端的 `win32-native`（或主程序目录）里有这 3 个 DLL，**没有** `beacon_napi.node`：
 
-> `native/` 仍然是**可选**的：如果你把 4 个文件放进插件目录，插件会优先用它们。
-> 这 4 个文件是平台相关的二进制，不随本仓库分发。
+```text
+beacon_wrapper.dll
+beacon_sdk.dll
+qimei.dll
+```
 
-## 一个 uskey 只能用两次
+把它们放到插件的 `native/`，再编译同目录的桥（与客户端版本无关，升级 DLL 不用改偏移）：
 
-上游对 uskey 有配额：**同一个 uskey 第 3 次请求起 403**（等 75 秒仍 403，是配额不是频率）。
-所以插件**每次请求都现签一个**（`getUskey()` 是本地调用，毫秒级，不联网）。
+```bat
+cl /nologo /LD /O2 /W3 native\marvis_beacon_shim.c /Fe:native\beacon_shim.dll /link /MACHINE:X64
+```
+
+`qimei36` 由 `beacon_get_qimei` 读取。这三个 DLL 是腾讯客户端的文件，不随本仓库分发。
 
 ## 已知边界
 

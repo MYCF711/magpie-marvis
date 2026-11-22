@@ -260,7 +260,7 @@ test("发给上游的 UA 必须是 Marvis agent 自己的那个（三形状都�
   }
 })
 
-test("4100404 风控 → 503 risk_blocked，文案要说清「换账号没用、可能是设备/出口」", async () => {
+test("4100404 风控 → 503 risk_blocked，文案指向 Beacon 现签而不是换出口", async () => {
   const s = stubFetch(() => upstreamError(403, { code: 4100404, msg: "客户端通用错误:请求被风控拦截" }))
   try {
     const req = requestFor("deepseek-v4-1-flash-261017")
@@ -268,7 +268,7 @@ test("4100404 风控 → 503 risk_blocked，文案要说清「换账号没用、
     assert.equal(res.status, 503, "风控是可重试语义，交给宿主重试")
     const out = await res.json()
     assert.equal(out.error.code, "risk_blocked")
-    assert.match(out.error.message, /设备指纹|出口/, "要说清是按设备/出口判的")
+    assert.match(out.error.message, /beacon_wrapper\.dll/, "要告诉用户缺的是官方 SDK，不是出口")
     assert.match(out.error.message, /换账号没用/, "否则用户只会不停地换号")
   } finally {
     s.restore()

@@ -14,27 +14,57 @@ import { createHash, randomUUID } from "node:crypto"
 import { ACCESS_KEY, BUSINESS_ID, CLIENT, BROWSER_UA, BASE } from "../context.mjs"
 import { uskeyOf, qimei36 } from "./fingerprint.mjs"
 
+function hex32() {
+  return randomUUID().replace(/-/g, "")
+}
+
 /**
- * 模型网关要求的 `Ual-Access-MarvisExt` 值。
+ * 本次请求的 Marvis 上下文。uskey 的 bus_info 和 Marvis-* 头必须用同一份 id。
  *
- * 字段来源（照抄 Marvis agent 的 `build_llm_auth_headers`）：
- *   qimei36 / osVersion / guid / uskey（现签）/ nonce（uuid）/ reqScene / taskType / clientVersion / isIoa
- *
- * @param {{ guid: string, clientVersion?: string }} acct
- * @returns {string} 紧凑 JSON（不能有空格，服务端按原文字符串校验）
+ * @param {{ openid?: string, loginType?: string }} acct
+ * @param {{ scene?: string, agentTag?: string, model?: string, conversationId?: string, responseId?: string, nonce?: string }} [opts]
  */
-export function marvisExt(acct) {
-  // qimei36 要求与设备一致：拿不到真值就整条字段不发，不要用占位值代替。
+export function requestIdentity(acct, opts = {}) {
+  const agentTag = opts.agentTag || "main"
+  const scene = opts.scene || "agent_chat"
+  const model = opts.model || "main-auto"
+  const conversationId = opts.conversationId || `conv_${hex32()}`
+  const responseId = opts.responseId || `resp_${hex32()}`
+  const nonce = opts.nonce || randomUUID()
+  const loginType = String(opts.loginType || acct?.loginType || "1")
+  const busInfo = [
+    `marvisAgentTag=${agentTag}`,
+    `marvisConversationID=${conversationId}`,
+    `marvisResponseID=${responseId}`,
+    `marvisScene=${scene}`,
+    `model=${model}`,
+    `nonce=${nonce}`,
+    `originOpenID=${acct?.openid ?? ""}`,
+  ].join("&")
+  return { agentTag, scene, model, conversationId, responseId, nonce, loginType, busInfo }
+}
+
+/**
+ * 模型网关要求的 `Ual-Access-MarvisExt`。uskey 按 bus_info 现签。
+ *
+ * @param {{ guid?: string, openid?: string, clientVersion?: string, loginType?: string }} acct
+ * @param {{ busInfo: string, nonce: string, loginType?: string }} identity
+ * @returns {Promise<string>}
+ */
+export async function marvisExt(acct, identity) {
+  const uskey = await uskeyOf(acct, identity)
   const qimei = qimei36()
   return JSON.stringify({
     ...(qimei ? { qimei36: qimei } : {}),
-    osVersion: "Windows-10-10.0.26200",
+    osVersion: process.env.MARVIS_OS_VERSION || "Windows-10-10.0.26100",
     guid: acct.guid ?? "",
-    uskey: uskeyOf(BUSINESS_ID),
-    nonce: randomUUID(),
+    uskey,
+    nonce: identity.nonce,
     reqScene: 1,
     taskType: "user",
-    clientVersion: acct.clientVersion ?? "1.60.3300.765",
+    clientVersion: acct.clientVersion || process.env.MARVIS_CLIENT_VERSION || "1.60.3400.795",
+    clientPlatform: "Windows",
+    clientPlatformVersion: process.env.MARVIS_CLIENT_PLATFORM_VERSION || "1.60.3400.35",
     isIoa: false,
   })
 }
@@ -43,11 +73,12 @@ export function marvisExt(acct) {
  * 模型网关的完整请求头。
  *
  * @param {{ openid: string, accessToken: string, guid: string, loginType?: string }} acct
- * @param {{ scene?: string, agentTag?: string, conversationId?: string, responseId?: string }} [opts]
- * @returns {Record<string, string>}
+ * @param {{ scene?: string, agentTag?: string, model?: string, conversationId?: string, responseId?: string }} [opts]
+ * @returns {Promise<Record<string, string>>}
  */
-export function llmHeaders(acct, opts = {}) {
-  const ext = marvisExt(acct)
+export async function llmHeaders(acct, opts = {}) {
+  const identity = requestIdentity(acct, opts)
+  const ext = await marvisExt(acct, identity)
   return {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -60,15 +91,19 @@ export function llmHeaders(acct, opts = {}) {
     "X-Stainless-Runtime-Version": "3.11.9",
     "X-Stainless-Async": "async:asyncio",
     "X-Stainless-Raw-Response": "true",
+    "X-Stainless-Read-Timeout": "600.0",
+    "X-Stainless-Retry-Count": "0",
     Authorization: "Bearer placeholder",
     "Ual-Access-Openid": acct.openid,
     "Ual-Access-Access-Token": acct.accessToken,
-    "Ual-Access-Login-Type": acct.loginType ?? "1",
+    "Ual-Access-Login-Type": identity.loginType,
     "Ual-Access-Guid": acct.guid ?? "",
-    "Marvis-AgentTag": opts.agentTag ?? "auto_discovery",
-    "Marvis-Conversation-ID": opts.conversationId ?? "",
-    "Marvis-Response-ID": opts.responseId ?? "",
-    "Marvis-Scene": opts.scene ?? "preload_summary",
+    "Ual-Access-Requestid": identity.responseId,
+    "Marvis-AgentTag": identity.agentTag,
+    "Marvis-Conversation-ID": identity.conversationId,
+    "Marvis-Response-ID": identity.responseId,
+    "Marvis-Scene": identity.scene,
+    "Marvis-Model-Level": "1",
     "Marvis-Protocol-Version": "1000",
     "X-Device-GUID": acct.guid ?? "",
     "Ual-Access-MarvisExt": ext,

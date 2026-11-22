@@ -84,7 +84,7 @@ function accounts() {
 async function servedModel(acct, slot) {
   const res = await fetch(`${BASE_V1}/chat/completions`, {
     method: "POST",
-    headers: llmHeaders(acct, { scene: "preload_summary", agentTag: "auto_discovery" }),
+    headers: await llmHeaders(acct, { model: slot, scene: "agent_chat", agentTag: "main" }),
     body: JSON.stringify({
       model: slot,
       stream: true,
